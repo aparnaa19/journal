@@ -940,6 +940,34 @@ function normalizePath(pathname) {
   return path || "/";
 }
 
+const basePath = normalizePath(import.meta.env.BASE_URL);
+
+function routePath(pathname) {
+  const path = normalizePath(pathname);
+
+  if (basePath === "/") {
+    return path;
+  }
+
+  if (path === basePath) {
+    return "/";
+  }
+
+  if (path.startsWith(`${basePath}/`)) {
+    return normalizePath(path.slice(basePath.length));
+  }
+
+  return path;
+}
+
+function browserPath(path) {
+  if (basePath === "/") {
+    return path;
+  }
+
+  return path === "/" ? `${basePath}/` : `${basePath}${path}`;
+}
+
 function pagePath(page) {
   if (page === "entries") return "/entries";
   if (page === "research") return "/research";
@@ -947,7 +975,7 @@ function pagePath(page) {
 }
 
 function routeFromPath(pathname) {
-  const path = normalizePath(pathname);
+  const path = routePath(pathname);
   const entry = entries.find((item) => item.link === path);
 
   if (entry) {
@@ -966,8 +994,10 @@ function routeFromPath(pathname) {
 }
 
 function pushPath(path) {
-  if (normalizePath(window.location.pathname) !== path) {
-    window.history.pushState({}, "", path);
+  const nextPath = browserPath(path);
+
+  if (normalizePath(window.location.pathname) !== normalizePath(nextPath)) {
+    window.history.pushState({}, "", nextPath);
   }
 }
 
@@ -1302,7 +1332,7 @@ function EntryRow({ entry, isOpening, onOpen }) {
     <a
       aria-label={`Open ${entry.title}`}
       className={`entry-row clickable-entry ${isOpening ? "is-opening" : ""}`}
-      href={entry.link}
+      href={browserPath(entry.link)}
       onClick={handleClick}
     >
       <div className="entry-content-column">
