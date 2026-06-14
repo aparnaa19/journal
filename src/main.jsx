@@ -1,1220 +1,333 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
 import "./styles.css";
 
-const skills = [
-  "SIEM & Detection",
-  "Incident Response",
-  "Threat Hunting",
-  "AI Security",
-  "Forensics",
-  "Email Security",
-  "Payload Development",
-  "Malware Analysis",
-];
+const allFiles = import.meta.glob("../content/**/*.md", { query: "?raw", import: "default", eager: true });
 
-const entries = [
-  {
-    title: "Phishing Simulation, Detection & Incident Response - Full Kill Chain Lab",
-    projectTitle: "Phishing Simulation, Detection & Incident Response",
-    type: "LAB",
-    summary:
-      "Built and investigated a controlled phishing kill chain from delivery through payload execution, persistence, C2 callback, Splunk detection, and SOC-style reporting.",
-    goal:
-      "Simulate a realistic phishing attack in a controlled home lab and detect it the way a SOC analyst would - using behavioral log analysis in Splunk, without prior knowledge of the payload.",
-    environment: "Attacker: Ubuntu VM - Victim: Windows 11 - SIEM: Splunk Enterprise",
-    phases: ["Delivery", "Execution", "Reconnaissance", "Persistence", "C2", "Exfiltration"],
-    keyFindings: [
-      "Phishing email bypassed Outlook filters using a password-protected zip",
-      "Custom payload had zero antivirus detections on VirusTotal",
-      "Full kill chain detected using a single Splunk behavioral query on Event ID 4688",
-      "Registry persistence disguised as WindowsUpdater among legitimate startup entries",
-      "Entire kill chain completed in under 5 seconds from execution to exfiltration",
-    ],
-    outcome:
-      "Attack fully detected, contained, and documented as a SOC-style incident report with timeline, IOCs, and remediation recommendations",
-    details: {
-      objective:
-        "Design and execute a controlled phishing attack simulation covering all six phases of the Cyber Kill Chain, then detect and investigate the attack using industry-standard SOC tools and workflows - Splunk SIEM, Windows Event Logs, MXToolbox, and VirusTotal - and document findings in a formal incident report.",
-      labEnvironment: [
-        ["Attacker Machine", "Ubuntu 24 (VirtualBox - Bridged Network)"],
-        ["Victim Machine", "Windows 11 Home - Lenovo - Build 26200"],
-        ["SIEM", "Splunk Enterprise"],
-        ["Network", "Both machines on same LAN via bridged adapter"],
-        ["Attacker IP", "192.168.0.24"],
-        ["Victim IP", "192.168.0.14"],
-      ],
-      delivery: [
-        'A phishing email was crafted impersonating an IT security notice with the subject "April invoice report." The payload was a Windows batch script renamed to .txt and compressed into a password-protected zip archive. The password was included in the email body - simulating a real attacker technique used to bypass email content scanners that cannot inspect encrypted archives.',
-        "The email was sent from a university Outlook account to another university Outlook account on the same tenant. Despite DKIM, DMARC, and SPF all failing authentication, the email was delivered successfully with a low spam confidence score (SCL: 1). The originating server was flagged as blacklisted on MXToolbox.",
-      ],
-      emailAuth: [
-        ["DKIM", "Failed - not signed"],
-        ["DMARC", "Failed - no policy on subdomain"],
-        ["SPF", "Failed - not authenticated"],
-        ["SCL Score", "1 - bypassed spam filter"],
-        ["Originating Server", "Blacklisted"],
-      ],
-      execution:
-        "The victim extracted the zip archive and executed the batch file. Windows Event ID 4688 logged explorer.exe spawning cmd.exe - the anomalous parent-child relationship that served as the primary detection trigger. Under normal circumstances, opening a file does not result in a command prompt being launched as a child process.",
-      reconIntro:
-        "Immediately after execution, the payload ran five native Windows recon commands in automated sequence:",
-      reconCommands: [
-        ["whoami", "Identify current user and domain"],
-        ["systeminfo", "Profile OS, hardware, and installed patches"],
-        ["ipconfig", "Map network configuration and IP addresses"],
-        ["net user", "Enumerate all local user accounts"],
-        ["net localgroup administrators", "Identify accounts with admin privileges"],
-      ],
-      reconConclusion:
-        "All output was written to %USERPROFILE%\\incident_log.txt for exfiltration. The exclusive use of native Windows binaries - no foreign executables introduced - is consistent with Living off the Land (LotL) tradecraft.",
-      persistence:
-        "The payload added a registry Run key to ensure execution on every subsequent user login. The entry name WindowsUpdater was deliberately chosen to blend in alongside legitimate startup entries such as OneDrive, Spotify, and Discord - a masquerading technique. Detection required cross-referencing every Run key value against known legitimate software.",
-      persistenceRows: [
-        ["Key", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"],
-        ["Name", "WindowsUpdater"],
-        ["Value", "C:\\Users\\theep\\invoice_report.bat"],
-      ],
-      c2:
-        "PowerShell was launched by cmd.exe and initiated an outbound TCP connection to the attacker machine at 192.168.0.24 on port 4444. A netcat listener on the attacker machine received the connection. Port 4444 is not associated with any approved business application and is commonly associated with reverse shell frameworks.",
-      exfiltration:
-        "The collected reconnaissance data was transmitted over the established C2 channel. The exfiltrated data included hostname, OS version, victim IP, installed hotfixes, registered email, and a full list of local administrator accounts - sufficient for an attacker to plan privilege escalation and lateral movement.",
-      detectionIntro:
-        "Detection was performed using behavioral hunting in Splunk - no prior knowledge of the payload name, file hash, or attacker IP was used during the investigation.",
-      detectionApproach:
-        "Hunt for anomalous parent-child process relationships in Event ID 4688.",
-      splunkQuery: `index=* EventCode=4688
-| where Creator_Process_Name="C:\\\\Windows\\\\System32\\\\cmd.exe"
-OR Creator_Process_Name="C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe"
-OR Creator_Process_Name="C:\\\\Windows\\\\explorer.exe"
-| where NOT New_Process_Name LIKE "%splunk%"
-| table _time, user, New_Process_Name, Creator_Process_Name
-| sort _time`,
-      attackChain: [
-        ["18:40:04.186", "cmd.exe", "explorer.exe", "Execution"],
-        ["18:40:04.888", "whoami.exe", "cmd.exe", "Recon"],
-        ["18:40:04.923", "systeminfo.exe", "cmd.exe", "Recon"],
-        ["18:40:08.421", "ipconfig.exe", "cmd.exe", "Recon"],
-        ["18:40:08.476", "net.exe", "cmd.exe", "Recon"],
-        ["18:40:08.560", "net.exe", "cmd.exe", "Recon"],
-        ["18:40:08.612", "reg.exe", "cmd.exe", "Persistence"],
-        ["18:40:08.651", "powershell.exe", "cmd.exe", "C2"],
-      ],
-      payloadAnalysis: [
-        ["Filename", "invoice_report.bat"],
-        ["File Type", "Windows Batch Script"],
-        ["SHA256", "d8d89dba02219e4d3014a0fa4bdf9e671e2891b95cbf0d4381d595f9c02d06d8"],
-        ["VirusTotal Detections", "0 / Not Found"],
-      ],
-      payloadConclusion:
-        "Zero detections across all antivirus engines confirmed the payload was custom-built with no prior signatures. Signature-based antivirus provided no protection. Behavioral detection via Splunk was the only effective control.",
-      iocs: [
-        ["Sender Email", "amahalaxmiarulljothi@hawk.illinoistech.edu"],
-        ["Recipient Email", "tgandhi3@hawk.illinoistech.edu"],
-        ["Malicious File", "invoice_report.bat"],
-        ["SHA256", "d8d89dba02219e4d3014a0fa4bdf9e671e2891b95cbf0d4381d595f9c02d06d8"],
-        ["Attacker IP", "192.168.0.24"],
-        ["C2 Port", "4444 TCP"],
-        ["Registry Key", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\WindowsUpdater"],
-      ],
-      nistMapping: [
-        ["Preparation", "Enabled audit policy, configured Splunk, set up process creation logging"],
-        ["Detection & Analysis", "Hunted process chains in Splunk, analyzed email headers, hashed payload, built timeline"],
-        ["Containment", "Isolated endpoint, terminated C2 connection"],
-        ["Eradication", "Removed registry key, deleted payload and staging file"],
-        ["Recovery", "Reconnected endpoint, reset compromised credentials"],
-        ["Post-Incident Activity", "Wrote SOC incident report, documented IOCs, identified detection gaps"],
-      ],
-      takeaways: [
-        "Password-protected zip attachments bypass email content scanners - a real and widely used attacker technique",
-        "A custom payload with no prior signatures is completely invisible to signature-based antivirus",
-        "Behavioral detection via SIEM process chain analysis was the only effective control in this scenario",
-        "The full kill chain was recovered using a single Splunk query - no prior knowledge of the payload required",
-        "Living off the Land tradecraft leaves minimal forensic footprint - native Windows tools generate less suspicion than foreign executables",
-        "Registry masquerading makes persistence difficult to detect without methodical cross-referencing of all startup entries",
-      ],
-      next: [
-        "Enable command line argument logging (ProcessCreationIncludeCmdLine_Enabled) so future Event 4688 logs capture full process parameters",
-        "Capture network traffic (PCAP) during the C2 phase to confirm exfiltrated data at the packet level",
-        "Deploy Sysmon for richer endpoint telemetry including network connections, file creation, and DNS queries",
-        "Build a Splunk alert to automatically fire when explorer.exe spawns cmd.exe or powershell.exe",
-      ],
-    },
-    story: [
-      {
-        title: "The Setup",
-        paragraphs: [
-          "I wanted to do more than just follow a tutorial. I wanted to understand what a phishing attack actually looks like from both sides - build it, deliver it, then switch seats and find it the way a SOC analyst would. No hints. No knowing what to look for. Just logs.",
-          "I set up a simple home lab - my Windows laptop as the victim, an Ubuntu VM as the attacker, both on the same network. Nothing fancy. Just enough to simulate a real scenario.",
-        ],
-      },
-      {
-        title: "Building the Attack",
-        paragraphs: [
-          "The first thing I learned was that delivering a malicious file is harder than it sounds.",
-          "I tried sending a .bat file directly - Gmail blocked it. I zipped it - still blocked. I tried Mailinator for a test inbox - port 25 was closed. Every time I thought I had a working delivery method, something blocked it.",
-          "Eventually I figured out what real attackers do - rename the payload to .txt, compress it into a password-protected zip, and put the password in the email body. The email scanner can't open an encrypted archive. It lets it through. That was my first real learning moment - email filters have a very specific blind spot, and attackers exploit it deliberately.",
-          "I sent the email from one university Outlook account to another. It landed in the inbox without a single spam flag - despite DKIM, DMARC, and SPF all failing. The email looked legitimate enough that the filters gave it a low spam score and delivered it anyway.",
-        ],
-      },
-      {
-        title: "The Payload",
-        paragraphs: [
-          "I kept the payload simple on purpose. No Metasploit. No pre-built frameworks. Just a Windows batch script I wrote myself.",
-          "It did four things in sequence - ran recon commands to profile the machine, added a registry Run key for persistence, then used PowerShell to open a TCP connection back to my Ubuntu VM and send everything it collected.",
-          "I named the registry key WindowsUpdater. It sat right next to OneDrive, Spotify, Discord in the startup list. Nobody would look at it twice.",
-          "On my Ubuntu terminal I had netcat listening on port 4444. When the payload ran on the Windows machine, I watched the connection come in live - hostname, OS version, IP address, all the admin accounts, installed patches. Everything an attacker needs to plan their next move. It felt uncomfortable how easy it was.",
-        ],
-      },
-      {
-        title: "Switching Sides",
-        paragraphs: [
-          "This was the part I was most curious about.",
-          "I opened Splunk and started from scratch - no searching for invoice_report.bat, no filtering by the attacker IP I already knew. I wanted to find it the same way a real analyst would, with no prior knowledge of what to look for.",
-          "The problem was noise. Splunk had over 1,500 Event ID 4688 entries. Splunk's own internal processes were generating most of them. I had to filter those out first before I could see anything meaningful.",
-          "Once the noise was cleared, I narrowed my search to one question - are there any processes being spawned by parents that shouldn't be spawning them? Specifically cmd.exe, powershell.exe, and explorer.exe.",
-          "That's when I saw it.",
-          "explorer.exe had spawned cmd.exe at 18:40:04. That's the red flag. A user opening a normal file doesn't launch a command prompt. Something was wrong.",
-          "I followed the chain. cmd.exe had spawned whoami.exe, then systeminfo.exe, then ipconfig.exe, then net.exe twice, then reg.exe, then powershell.exe - all within 4 seconds. That's not a human doing things manually. That's a script running automatically.",
-          "I had the full kill chain. Six phases. Nine process events. All recovered from a single behavioral query without knowing what I was looking for when I started.",
-        ],
-      },
-      {
-        title: "The Persistence Find",
-        paragraphs: [
-          "The reg.exe entry in the process chain told me something had touched the registry. I queried the Run key directly and found WindowsUpdater pointing to invoice_report.bat.",
-          "Looking at it sitting there among OneDrive and Spotify - I understood immediately why masquerading works. If you're not specifically looking for it, you scroll right past it. Detection required going through every single startup entry and asking whether it belonged there.",
-        ],
-      },
-      {
-        title: "What the Logs Couldn't Tell Me",
-        paragraphs: [
-          "After writing the incident report I noticed two gaps in my own investigation.",
-          "First - Event ID 4688 showed me that reg.exe ran, but not what registry key it wrote. Command line argument logging wasn't enabled. In a real investigation that would have slowed things down significantly.",
-          "Second - I knew PowerShell made an outbound connection, but I had no PCAP to prove what data actually left the machine at the network level. The Splunk logs showed the process. They didn't show the packets.",
-          "Both of those gaps went into my recommendations section. Knowing what your detection setup can't see is just as important as knowing what it can.",
-        ],
-      },
-      {
-        title: "What I Took Away",
-        paragraphs: [
-          "The thing that stuck with me most was the VirusTotal result. Zero detections. A payload I built in twenty minutes, using nothing but native Windows tools and a PowerShell one-liner, was completely invisible to every antivirus engine.",
-          "The only thing that caught it was behavioral analysis - looking at what processes spawned what, in what order, and asking whether that made sense.",
-          "That's the gap between signature-based detection and behavioral detection. And it's a much bigger gap than I expected before I did this.",
-        ],
-      },
-      {
-        title: "What's Next",
-        list: [
-          "Enable command line logging so Event 4688 captures full process arguments",
-          "Capture PCAP during C2 to confirm exfiltration at the packet level",
-          "Deploy Sysmon for richer telemetry - network connections, file creation, DNS queries",
-          "Upgrade the payload to a macro-based Word document to simulate a more realistic delivery mechanism and capture Event ID 4104",
-        ],
-      },
-    ],
-    date: "May 16, 2026",
-    roleFit: "SOC Analyst / Cybersecurity Analyst",
-    skills: [
-      "SIEM & Detection",
-      "Incident Response",
-      "Threat Hunting",
-      "Email Security",
-      "Payload Development",
-      "Forensics",
-    ],
-    demonstratedSkills: [
-      "Threat Hunting",
-      "Behavioral Log Analysis",
-      "Email Header Analysis",
-      "SIEM Querying",
-      "Persistence Detection",
-      "Incident Reporting",
-      "IOC Identification",
-      "AV Evasion Awareness",
-    ],
-    tools: [
-      "Splunk",
-      "Windows Event ID 4688",
-      "MXToolbox",
-      "VirusTotal",
-      "netcat",
-      "PowerShell",
-      "Microsoft Outlook",
-      "auditpol",
-      "Ubuntu",
-      "Windows 11",
-    ],
-    link: "/entry/3",
-  },
-  {
-    title: "Setting up Pi-hole on VirtualBox for home network DNS monitoring",
-    projectTitle: "Setting up Pi-hole on VirtualBox for home network DNS monitoring",
-    type: "LAB",
-    summary:
-      "Built a live home network DNS monitoring lab with Pi-hole, VirtualBox, Ubuntu Server, Wireshark, and real device traffic.",
-    goal:
-      "Gain hands-on SOC-relevant skills in DNS analysis, network traffic monitoring, device fingerprinting, and threat detection on a real network - not a simulation.",
-    environment:
-      "Pi-hole VM on Ubuntu Server 22.04 - VirtualBox - Hitron CODA-5512 - Wireshark - 8 live clients",
-    phases: [
-      "VM Setup",
-      "Pi-hole Deployment",
-      "Router DNS Configuration",
-      "Client Labeling",
-      "DNS Monitoring",
-      "Traffic Analysis",
-    ],
-    keyFindings: [
-      "8 devices monitored across a live home network",
-      "Identified device types, usernames, and apps in use passively",
-      "Blocked 82,208 malicious and tracking domains network-wide",
-      "Built a complete network map from scratch using traffic analysis",
-      "Detected DNS bypass, beaconing, trackers, ARP patterns, and an unknown device mystery",
-    ],
-    outcome:
-      "A working home SOC setup that directly mirrors enterprise DNS security tools like Cisco Umbrella and Infoblox.",
-    details: {
-      sections: [
-        {
-          title: "Objective",
-          paragraphs: [
-            "Deploy a DNS monitoring solution on a live home network to develop practical SOC analyst skills including traffic analysis, device fingerprinting, threat detection, and network forensics - using real devices and real traffic.",
-          ],
-        },
-        {
-          title: "Environment",
-          table: {
-            headers: ["Component", "Detail"],
-            rows: [
-              ["Hypervisor", "Oracle VirtualBox on Windows 11"],
-              ["VM OS", "Ubuntu Server 22.04 LTS"],
-              ["VM Resources", "2048MB RAM, 25GB storage, 1 CPU"],
-              ["Network Mode", "Bridged Adapter (Realtek RTL8852AE WiFi 6)"],
-              ["Pi-hole IP", "192.168.0.200 (static)"],
-              ["Router", "Hitron CODA-5512 (192.168.0.1)"],
-              ["Subnet", "192.168.0.0/24"],
-              ["Active Clients", "8 devices"],
-              ["Packet Capture", "Wireshark on Windows host"],
-            ],
-            monoColumns: [1],
-          },
-          codeTitle: "Network Topology",
-          code: `Internet
-    |
-Hitron CODA-5512 (192.168.0.1)
-    |
-Pi-hole VM (192.168.0.200) <- all DNS intercepted here
-    |                           |
-Main WiFi devices        TP-Link RE220 Extender (192.168.0.193)
-                                    |
-                         Devices behind extender`,
-        },
-        {
-          title: "Deployment Steps",
-          subsections: [
-            {
-              title: "Step 1 - VM Setup",
-              list: [
-                "Created Ubuntu Server VM with Bridged network adapter",
-                "Assigned static IP 192.168.0.200 via Netplan configuration",
-                "Confirmed internet connectivity before Pi-hole installation",
-              ],
-            },
-            {
-              title: "Step 2 - Pi-hole Installation",
-              code: "curl -sSL https://install.pi-hole.net | bash",
-              list: [
-                "Upstream DNS: Google (8.8.8.8)",
-                "Query logging: Enabled (Privacy Mode 0 - full visibility)",
-                "Blocklist: 82,208 domains loaded",
-              ],
-            },
-            {
-              title: "Step 3 - Router Configuration",
-              list: [
-                "Changed Hitron DHCP End IP from .200 to .199 to reserve .200 for Pi-hole",
-                "Set router Primary DNS to 192.168.0.200",
-                "Set Secondary DNS to 8.8.8.8 as fallback",
-                "All 8 devices automatically routed through Pi-hole without individual configuration",
-              ],
-            },
-            {
-              title: "Step 4 - Client Labeling",
-              table: {
-                headers: ["Client", "MAC Address"],
-                rows: [
-                  ["aparnaa phone", "9A:9E:6D:D7:71:8F"],
-                  ["aparnaa lap", "E0:0A:F6:A0:29:37"],
-                  ["amazon", "B8:F8:62:A7:41:74"],
-                  ["amazon2", "58:E6:C5:8A:91:78"],
-                  ["ram?", "DA:62:79:3C:60:A3"],
-                ],
-                monoColumns: [1],
-              },
-            },
-          ],
-        },
-        {
-          title: "Findings",
-          subsections: [
-            {
-              title: "Finding 1 - Device Fingerprinting via DNS",
-              paragraphs: ["Identified all device types purely from DNS behavioral patterns:"],
-              table: {
-                headers: ["IP", "Device", "Key Evidence"],
-                rows: [
-                  ["192.168.0.21", "Pixel 9 (Android)", "T-Mobile RCS, Google domains"],
-                  ["192.168.0.23", "iPhone (T-Mobile)", "iphone-ld.apple.com, carrier domain"],
-                  ["192.168.0.193", "TP-Link Extender", "ARP sweep pattern, MAC confirmed"],
-                  ["192.168.0.198", "Windows laptop", "grafana.com, office.com, theepan.local"],
-                  ["192.168.0.11", "Amazon Fire TV", "acs.ntp-fireos.com"],
-                ],
-                monoColumns: [0],
-              },
-              codeTitle: "iPhone vs iPad vs Mac decision tree",
-              code: `iphone-ld.apple.com present?  -> iPhone (100% confirmed)
-ipad-ld.apple.com present?    -> iPad (100% confirmed)
-swscan.apple.com present?     -> Mac (100% confirmed)
-Carrier RCS domain present?   -> Phone (never iPad/Mac)`,
-            },
-            {
-              title: "Finding 2 - Passive Reconnaissance Demonstration",
-              paragraphs: [
-                "Without any admin access or active scanning, I identified the device owner name Theepan, Windows username theep, apps in use including Spotify, Twitter/X, and DoorDash, and VirtualBox installation evidence from the 192.168.56.x virtual interface in the ARP table.",
-                "This demonstrates the power and risk of passive network reconnaissance.",
-              ],
-            },
-            {
-              title: "Finding 3 - Background App Tracking",
-              paragraphs: ["Captured silent background beaconing from devices at rest:"],
-              table: {
-                headers: ["Domain", "App", "Behavior"],
-                rows: [
-                  ["edge-mqtt.facebook.com", "Facebook", "Beaconing every 30 seconds"],
-                  ["test-gateway.instagram.com", "Instagram", "Silent check-in"],
-                  ["otel-mobile.doordash.com", "DoorDash", "Telemetry when idle"],
-                  ["sdk.iad-06.braze.com", "Marketing SDK", "User tracking"],
-                  ["api3.siftscience.com", "Fraud detection", "Behavior monitoring"],
-                  ["api.segment.io", "Analytics", "Blocked by Pi-hole"],
-                ],
-                monoColumns: [0],
-              },
-            },
-            {
-              title: "Finding 4 - DNS Bypass Detection",
-              list: [
-                "Laptop: Hardcoded Cloudflare DNS (1.1.1.1) - identified via nslookup",
-                "Pixel 9: Android Private DNS enabled - identified via phone settings",
-                "SOC relevance: Same technique used by malware to bypass corporate DNS controls",
-              ],
-            },
-            {
-              title: "Finding 5 - Network Topology via ARP Analysis",
-              list: [
-                "Mapped complete network topology using Wireshark ARP filter",
-                "Identified extender changed IP from .23 to .193 after reboot using the same MAC",
-                "Confirmed devices behind extender: .13, .26, .27, .28",
-                "Detected DHCP failure - unknown device repeatedly requesting IP 7+ times",
-                "Identified Chromecast/Google TV via _googlecast._tcp.local MDNS",
-              ],
-            },
-            {
-              title: "Finding 6 - ARP Security Awareness",
-              list: [
-                "Normal ARP: gateway lookup",
-                "Gratuitous ARP: new device announcing itself",
-                "ARP sweep: extender scanning for known devices",
-                "ARP spoofing indicator: same IP with two different MACs",
-              ],
-            },
-          ],
-        },
-        {
-          title: "Protocol Analysis Summary",
-          table: {
-            headers: ["Protocol", "Findings"],
-            rows: [
-              ["DNS", "Primary monitoring tool - identified all devices and apps"],
-              ["ARP", "Mapped network topology, detected device changes"],
-              ["QUIC", "Twitter/X streaming traffic identified"],
-              ["TLS", "Microsoft/Office365 encrypted sessions"],
-              ["MDNS", "Device names, Spotify, AirPlay, Chromecast discovery"],
-              ["SSDP", "Smart device announcements from router"],
-              ["NBNS", "Windows PC names leaked to network"],
-              ["DHCP", "Unknown device failing to join network detected"],
-              ["IGMPv3", "Apple multicast group membership"],
-            ],
-          },
-        },
-        {
-          title: "MITRE ATT&CK Mapping",
-          table: {
-            headers: ["Finding", "Technique ID", "Technique Name", "Tactic"],
-            rows: [
-              ["Beaconing traffic detected", "T1071.004", "Application Layer Protocol: DNS", "Command and Control"],
-              ["Background app calling home", "T1071.001", "Application Layer Protocol: Web", "Command and Control"],
-              ["Passive device fingerprinting", "T1040", "Network Sniffing", "Discovery"],
-              ["Device names leaked via NBNS", "T1016", "System Network Configuration Discovery", "Discovery"],
-              ["ARP sweep by extender", "T1018", "Remote System Discovery", "Discovery"],
-              ["DNS bypass via 1.1.1.1", "T1071.004", "DNS C2 bypass", "Defense Evasion"],
-              ["Tracker SDKs beaconing", "T1020", "Automated Exfiltration", "Exfiltration"],
-              ["App data sent silently", "T1041", "Exfiltration Over C2 Channel", "Exfiltration"],
-              ["DHCP failure detection", "T1200", "Hardware Additions", "Initial Access"],
-              ["MAC address randomization", "T1disguise", "Defense Evasion via MAC spoofing", "Defense Evasion"],
-            ],
-            monoColumns: [1],
-          },
-          paragraphs: [
-            "These techniques were observed from a defender's perspective - detected and analyzed, not executed. This mirrors real SOC analyst work: identifying attacker techniques in live traffic.",
-          ],
-        },
-        {
-          title: "NIST Cybersecurity Framework Alignment",
-          table: {
-            headers: ["NIST Function", "Activity Performed", "Tool Used"],
-            rows: [
-              ["IDENTIFY", "Mapped all devices on network by IP, MAC, device type", "Pi-hole, Wireshark, ARP analysis"],
-              ["IDENTIFY", "Identified protocols in use across network", "Wireshark protocol hierarchy"],
-              ["IDENTIFY", "Discovered shadow devices", "ARP + MAC tracing"],
-              ["PROTECT", "Blocked 82,208 malicious/tracking domains", "Pi-hole blocklist"],
-              ["PROTECT", "Reserved static IP for DNS server", "Router DHCP configuration"],
-              ["PROTECT", "Labeled all clients by MAC for tracking", "Pi-hole client management"],
-              ["DETECT", "Monitored all DNS queries network-wide in real time", "Pi-hole Query Log"],
-              ["DETECT", "Captured and analyzed all network packets", "Wireshark"],
-              ["DETECT", "Identified DNS bypass on two devices", "nslookup + phone settings"],
-              ["DETECT", "Detected background beaconing from idle devices", "Pi-hole + Wireshark"],
-              ["DETECT", "Identified ARP sweep and gratuitous ARP", "Wireshark ARP filter"],
-              ["RESPOND", "Documented all findings with evidence", "Project journal"],
-              ["RESPOND", "Fixed DNS bypass on laptop and phone", "Manual DNS configuration"],
-              ["RESPOND", "Reserved DHCP range to prevent IP conflicts", "Router settings"],
-              ["RECOVER", "Confirmed Pi-hole still functional after router DNS change", "nslookup verification"],
-            ],
-          },
-        },
-        {
-          title: "Enterprise Tool Mapping",
-          table: {
-            headers: ["This Lab", "Enterprise Equivalent"],
-            rows: [
-              ["Pi-hole", "Cisco Umbrella, Infoblox, Windows DNS"],
-              ["Wireshark", "Network TAP, SPAN port capture"],
-              ["Pi-hole Query Log", "SIEM DNS logs (Splunk, ELK)"],
-              ["MAC fingerprinting", "802.1X NAC solutions"],
-              ["ARP monitoring", "Dynamic ARP Inspection (DAI)"],
-            ],
-          },
-        },
-        {
-          title: "Challenges and Solutions",
-          table: {
-            headers: ["Challenge", "Solution"],
-            rows: [
-              ["VM assigned wrong IP (10.10.10.2)", "Configured static IP via Netplan"],
-              ["Laptop bypassing Pi-hole (1.1.1.1)", "Identified via nslookup, changed manually"],
-              ["Phone not appearing in logs", "Found Android Private DNS bypass"],
-              ["Devices behind extender sharing one IP", "Used DNS fingerprinting to identify individually"],
-              ["Extender changing IP on reboot", "Traced via MAC address across both IPs"],
-              ["DHCP conflict risk on .200", "Adjusted DHCP range to .10-.199"],
-              ["Pi-hole installation taking 20+ min", "Identified slow package installation, waited"],
-            ],
-          },
-        },
-        {
-          title: "Next Steps",
-          list: [
-            "Nmap network mapping",
-            "DHCP reservations for all devices",
-            "Extender AP mode for individual device visibility",
-            "ELK Stack integration for log aggregation",
-            "Suricata IDS deployment",
-            "DNS tunneling simulation and detection",
-            "ARP spoofing simulation and detection",
-            "pfSense firewall deployment",
-          ],
-        },
-      ],
-    },
-    date: "May 21, 2026",
-    roleFit: "SOC Analyst / Network Security Analyst",
-    skills: [
-      "Network Security",
-      "DNS Forensics",
-      "Traffic Analysis",
-      "Device Fingerprinting",
-      "Threat Detection",
-      "Incident Investigation",
-    ],
-    demonstratedSkills: [
-      "Network Architecture",
-      "DNS Forensics",
-      "Traffic Analysis",
-      "Device Fingerprinting",
-      "Threat Awareness",
-      "Incident Investigation",
-      "Protocol Knowledge",
-    ],
-    tools: [
-      "Pi-hole",
-      "VirtualBox",
-      "Ubuntu Server 22.04",
-      "Wireshark",
-      "Hitron CODA-5512",
-    ],
-    link: "/entry/4",
-    story: [
-      {
-        title: "How It Started",
-        paragraphs: [
-          "I wanted to learn cybersecurity practically, not just theoretically. Reading about DNS and network monitoring is one thing - actually seeing it happen on a real network is completely different. So I decided to build a home network monitoring lab from scratch.",
-          "The goal was simple: deploy Pi-hole on a virtual machine, point my router at it, and start watching what my network actually does. What I didn't expect was how much I would discover.",
-        ],
-      },
-      {
-        title: "Setting Up - The First Hurdles",
-        paragraphs: [
-          "The first mistake I made was downloading Ubuntu 26.04 instead of 22.04. A small thing, but it taught me immediately that in cybersecurity, version numbers matter. Tools are tested against specific versions and using the wrong one causes unexpected problems.",
-          "Setting up VirtualBox was straightforward, but the network mode choice - Bridged vs NAT - was my first real learning moment. NAT would have kept the VM isolated. Bridged mode gave it a real IP on my home network. The difference between those two choices is the difference between a VM that works and one that doesn't for this purpose. Understanding why matters, not just which button to click.",
-          "The Pi-hole installation itself took over 20 minutes. I thought it had frozen. It hadn't - just slow. That patience is also a skill.",
-        ],
-      },
-      {
-        title: "The Moment It Clicked",
-        paragraphs: [
-          "When I opened the Pi-hole dashboard for the first time and saw 8 active clients already logging traffic - before I had even done anything - that was the moment it clicked. The network was already talking. It had always been talking. I just couldn't see it before.",
-          "Within minutes I could see someone watching YouTube, someone on Twitter, Amazon Fire devices checking in, and ads being blocked automatically.",
-          "This wasn't a simulation. These were real people in my house, real devices, real traffic - and I was seeing all of it from a dashboard I built myself.",
-        ],
-      },
-      {
-        title: "The Investigation That Surprised Me Most",
-        paragraphs: [
-          "The most interesting discovery came from a device showing as 192.168.0.23. I thought it was the WiFi extender. Then it appeared as 192.168.0.193. Two IPs, same network - confusing.",
-          "I filtered Wireshark by ARP traffic. The extender was broadcasting to find all its connected devices. I traced the MAC address across both IPs - da:62:79:3c:60:a3 - identical. Same device, two IPs. The extender had rebooted and received a new IP from DHCP.",
-          "That single investigation taught me more about ARP, DHCP, and MAC addresses than any textbook could. I wasn't reading about it - I was solving it in real time.",
-        ],
-      },
-      {
-        title: "Finding Someone's Name From Passive Monitoring",
-        paragraphs: [
-          "The most eye-opening moment was identifying a person's name - Theepan - purely from passive network monitoring. No hacking. No admin access. Just watching.",
-          "theepan.local appeared in MDNS traffic. C:\\Users\\theep leaked via NBNS broadcast. grafana.com confirmed developer or IT background. Spotify MDNS confirmed app usage.",
-          "From network traffic alone I knew their name, their Windows username, their profession, what apps they were using, and that they had VirtualBox installed. They had no idea any of this was visible.",
-          "This is what attackers call passive reconnaissance - and it's completely silent. No alerts. No logs on their end. Just listening.",
-        ],
-      },
-      {
-        title: "What Surprised Me About DNS",
-        paragraphs: [
-          "I came in thinking Pi-hole was just an ad blocker. I left understanding that DNS is one of the most powerful visibility layers in network security. Every connection starts with a DNS query. Malware has to call home - and to call home, it needs DNS. That's where you catch it.",
-          "Seeing trackers like api.segment.io, sdk.iad-06.braze.com, and api3.siftscience.com all returning 0.0.0.0 - blocked by Pi-hole - while the person was just sitting there not actively using their phone - that was a revelation. Apps are constantly talking. Most people have no idea.",
-        ],
-      },
-      {
-        title: "What I Would Tell Myself Before Starting",
-        list: [
-          "The network is always talking - you just need the right tools to listen",
-          "Version numbers matter - always double check before downloading",
-          "Bridged vs NAT - understand the why, not just the what",
-          "DNS is not just for ad blocking - it's your first line of security visibility",
-          "Passive monitoring reveals more than active scanning - silence is powerful",
-        ],
-      },
-      {
-        title: "Where This Is Going",
-        paragraphs: [
-          "This lab is phase 1. The foundation is built. Next comes Nmap for active network mapping, ELK Stack for log aggregation and alerting, Suricata for intrusion detection, and eventually simulating real attacks - DNS tunneling, ARP spoofing, C2 beaconing - so I can practice detecting them.",
-          "Every phase gets documented. Every finding gets written up. Because in cybersecurity, if it isn't documented, it didn't happen.",
-        ],
-      },
-    ],
-  },
-  {
-    title: "SIEM Threat Detection Lab",
-    projectTitle: "SIEM Threat Detection Lab",
-    type: "LAB",
-    summary:
-      "Built a multi-host SOC environment ingesting Windows and Linux logs into Splunk, simulated 7 real-world attacks, and built live detection alerts and a monitoring dashboard.",
-    goal:
-      "Build a working SOC lab that detects real attack patterns across Windows and Linux hosts using Splunk as the SIEM.",
-    environment:
-      "Windows Host (16GB): Windows log source + Splunk SIEM | Linux VM (Ubuntu 25.10, VirtualBox): Linux log source | Network: Both on same LAN via bridged adapter",
-    phases: [
-      "Brute Force",
-      "Privilege Escalation",
-      "PowerShell Execution",
-      "Persistence",
-      "Reconnaissance",
-      "Linux Auth Abuse",
-      "Sudo Abuse",
-    ],
-    keyFindings: [
-      "25,000+ events ingested across Windows Security, Sysmon, Linux auth",
-      "Sysmon captured encoded PowerShell command character by character",
-      "Windows Defender flagged encoded payload as Mimikatz — demonstrating endpoint + SIEM layered detection",
-      "Full attack chain detected using behavioral SPL queries",
-      "Cross-platform visibility achieved over bridged LAN via rsyslog UDP 514",
-      "Sysmon XML parsing failure resolved through manual forwarder config",
-    ],
-    outcome:
-      "7 detection alerts built and firing. SOC dashboard live with 7 panels. Full Windows and Linux log visibility achieved end-to-end.",
-    details: {
-      sections: [
-        {
-          title: "Project Overview",
-          paragraphs: [
-            "A home SOC lab built to simulate a real Security Operations Center using Splunk Enterprise as the SIEM, ingesting logs from a Windows host and a Linux VM, detecting simulated attacks in real time.",
-          ],
-        },
-        {
-          title: "Infrastructure",
-          table: {
-            headers: ["Component", "Detail"],
-            rows: [
-              ["Laptop 1", "Windows 11, 16GB RAM — SIEM + logs"],
-              ["Linux VM", "Ubuntu 25.10, VirtualBox"],
-              ["SIEM", "Splunk Enterprise 10.2"],
-              ["Forwarder", "Splunk Universal Forwarder"],
-              ["Linux Forwarding", "rsyslog UDP 514"],
-              ["Network", "Bridged adapter, same LAN"],
-            ],
-          },
-        },
-        {
-          title: "Log Ingestion — Windows",
-          list: [
-            "Enabled security auditing via auditpol for logon events, account management, privilege use, and process creation",
-            "Installed Sysmon v15 with SwiftOnSecurity community config for enriched telemetry — process creation, DNS queries, network connections",
-            "Deployed Splunk Universal Forwarder configured via inputs.conf to ship Security and Sysmon logs to Splunk on port 9997",
-            "Resolved Sysmon XML binary parsing issue by installing Splunk Add-on for Sysmon and reconfiguring sourcetype to xmlwineventlog",
-          ],
-        },
-        {
-          title: "Log Ingestion — Linux",
-          list: [
-            "Configured rsyslog to forward /var/log/auth.log to Splunk via UDP 514",
-            "Resolved cross-host connectivity by switching VirtualBox adapter from NAT to Bridged and adding Windows Firewall inbound rule for UDP 514",
-          ],
-        },
-        {
-          title: "Attacks Simulated and Detections Built",
-          subsections: [
-            {
-              title: "1. Brute Force — MITRE T1110",
-              list: [
-                "Simulation: PowerShell loop generating 20 failed logons for fakeuser",
-                "Detection: EventCode 4625, count > 5 per account",
-                "Severity: Medium",
-              ],
-            },
-            {
-              title: "2. Suspicious PowerShell — MITRE T1059.001",
-              list: [
-                "Simulation: Encoded command and hidden window PowerShell execution",
-                "Detection: Sysmon Event ID 1, CommandLine contains EncodedCommand or hidden",
-                "Severity: High",
-                "Note: Windows Defender flagged as Mimikatz — demonstrated layered endpoint + SIEM detection",
-              ],
-            },
-            {
-              title: "3. New User Creation — MITRE T1136.001",
-              list: [
-                "Simulation: net user hacker Password123! /add",
-                "Detection: EventCode 4720",
-                "Severity: High",
-              ],
-            },
-            {
-              title: "4. Privilege Escalation — MITRE T1078.003",
-              list: [
-                "Simulation: net localgroup administrators hacker /add",
-                "Detection: EventCode 4732",
-                "Severity: Critical",
-              ],
-            },
-            {
-              title: "5. CMD Reconnaissance — MITRE T1059.003",
-              list: [
-                "Simulation: cmd.exe /c whoami, ipconfig, net user",
-                "Detection: Sysmon Event ID 1, Image contains cmd.exe",
-                "Severity: Medium",
-              ],
-            },
-            {
-              title: "6. Linux Failed Authentication — MITRE T1110",
-              list: [
-                "Simulation: su - fakeuser, su - root repeated attempts",
-                "Detection: syslog keywords failed, authentication failure",
-                "Severity: High",
-              ],
-            },
-            {
-              title: "7. Linux Sudo Abuse — MITRE T1548.003",
-              list: [
-                "Simulation: sudo cat /etc/shadow",
-                "Detection: syslog keyword sudo from Linux host",
-                "Severity: Medium",
-              ],
-            },
-          ],
-        },
-        {
-          title: "Dashboard",
-          paragraphs: ["Built a 7-panel SOC Monitoring Dashboard in Splunk:"],
-          list: [
-            "Failed logon bar chart (by account and machine)",
-            "Suspicious PowerShell command table",
-            "New user creation table",
-            "Privilege escalation table (by account and group)",
-            "CMD process creation table (by CommandLine)",
-            "Linux failed auth count (by host)",
-            "Linux sudo usage count (by host)",
-          ],
-        },
-        {
-          title: "MITRE ATT&CK Coverage",
-          list: [
-            "T1110 — Brute Force",
-            "T1059.001 — PowerShell",
-            "T1059.003 — Windows Command Shell",
-            "T1136.001 — Create Local Account",
-            "T1078.003 — Valid Accounts",
-            "T1548.003 — Sudo Abuse",
-          ],
-        },
-        {
-          title: "NIST SP 800-61 Mapping",
-          table: {
-            headers: ["Phase", "Actions Taken"],
-            rows: [
-              ["Preparation", "Enabled auditpol, installed Sysmon, configured Splunk forwarder"],
-              ["Detection & Analysis", "Built SPL queries, hunted by EventCode, verified log sources"],
-              ["Containment", "Alerts configured to fire on detection"],
-              ["Eradication", "Cleaned up test users and registry entries"],
-              ["Post-Incident", "Documented IOCs, wrote investigation report"],
-            ],
-          },
-        },
-        {
-          title: "Challenges Resolved",
-          list: [
-            "Sysmon logs appeared as raw binary in Splunk — fixed by installing Sysmon add-on and reconfiguring sourcetype",
-            "Linux VM isolated from Windows host — fixed by switching VirtualBox from NAT to Bridged adapter",
-            "Windows Firewall blocking UDP 514 — fixed by adding inbound rule",
-            "Splunk admin password lost — recovered via user-seed.conf",
-            "Splunk Universal Forwarder reading .evtx as raw file — fixed by switching to WinEventLog input method",
-          ],
-        },
-      ],
-    },
-    date: "May 21, 2026",
-    roleFit: "SOC Analyst / Security Engineer",
-    skills: ["SIEM & Detection", "Incident Response", "Threat Hunting", "Forensics"],
-    demonstratedSkills: [
-      "SIEM Configuration",
-      "SPL Querying",
-      "Log Ingestion",
-      "Threat Detection",
-      "MITRE ATT&CK Mapping",
-      "Incident Alerting",
-      "Cross-Platform Forensics",
-      "Network Troubleshooting",
-      "Sysmon Telemetry",
-      "Dashboard Building",
-    ],
-    tools: [
-      "Splunk",
-      "Sysmon",
-      "Windows Event Logs",
-      "rsyslog",
-      "VirtualBox",
-      "Ubuntu",
-      "Splunk Universal Forwarder",
-      "auditpol",
-      "PowerShell",
-    ],
-    images: [
-      {
-        src: "/images/soc-dashboard.png",
-        caption: "SOC Monitoring Dashboard — 7 live panels across Windows and Linux detection alerts",
-      },
-      {
-        src: "/images/bruteforce.png",
-        caption: "Brute Force Detection — EventCode 4625, 20 failed logons for fakeuser detected via SPL",
-      },
-      {
-        src: "/images/suspowershell.png",
-        caption: "Suspicious PowerShell Detection — Sysmon Event ID 1, encoded CommandLine captured across 29,100 events",
-      },
-      {
-        src: "/images/newuseracc.png",
-        caption: "New User Account Created — EventCode 4720 fired on account creation (ComputerName: Theepan_Hrithik)",
-      },
-      {
-        src: "/images/privescalation.png",
-        caption: "Privilege Escalation — EventCode 4732, theep added to Administrators group",
-      },
-      {
-        src: "/images/suscmd.png",
-        caption: "Suspicious CMD Process Creation — 672 events, whoami, ipconfig, net user detected via Sysmon",
-      },
-      {
-        src: "/images/linuxfailed.png",
-        caption: "Linux Failed Authentication — 61 events from 192.168.0.24 via rsyslog UDP 514",
-      },
-      {
-        src: "/images/inuxsudo.png",
-        caption: "Linux Sudo Abuse — sudo cat /etc/shadow captured via syslog from 192.168.0.24",
-      },
-    ],
-    link: "/entry/5",
-    story: [
-      {
-        title: "The Idea",
-        paragraphs: [
-          "I wanted to build something that worked like a real SOC — not just follow a tutorial and call it done. The goal was simple: set up a SIEM, throw real attacks at it, and see if I could catch them.",
-          "I had two laptops. One became the Windows host and Splunk server. The other ran an Ubuntu VM in VirtualBox as the Linux log source. Nothing fancy. Just enough to simulate what a real two-host environment looks like.",
-        ],
-      },
-      {
-        title: "The First Wall",
-        paragraphs: [
-          "Installing Splunk was straightforward. Installing Sysmon was straightforward. The first real problem came when I checked Splunk and saw nothing.",
-          "Sysmon was running. Event Viewer showed hundreds of events. But Splunk was empty.",
-          "I spent time going back and forth between the forwarder config and Splunk. Eventually figured out the issue — I had configured the forwarder to monitor the raw .evtx file directly. Splunk was reading it as binary. The fix was switching to WinEventLog input instead of file monitoring. Once I did that, events started flowing.",
-          "Then the same thing happened with Sysmon — events were coming in but showing as unreadable hex. Installed the Splunk Add-on for Sysmon and reconfigured the sourcetype to xmlwineventlog. That fixed it.",
-        ],
-      },
-      {
-        title: "Getting Linux In",
-        paragraphs: [
-          "I assumed forwarding Linux logs to Splunk would be quick. It wasn't.",
-          "rsyslog was configured, Splunk had the UDP port open, but nothing arrived. The Linux VM couldn't reach the Windows host at all. The problem was VirtualBox's NAT mode — the VM was completely isolated from the LAN. Switched to Bridged Adapter, the VM got a real IP on the same network, and connectivity was restored. Added a Windows Firewall inbound rule for UDP 514 and Linux logs started appearing in Splunk.",
-        ],
-      },
-      {
-        title: "Simulating the Attacks",
-        paragraphs: [
-          "This was the part that made everything real.",
-          "Running the brute force simulation — a PowerShell loop hammering failed logons — and then watching 20 EventCode 4625 entries appear in Splunk with account names and timestamps felt like the first moment the lab actually worked.",
-          "The PowerShell simulation hit an unexpected wall. Windows Defender flagged the encoded command as Mimikatz and killed the session automatically before Sysmon could log it. That was actually a valuable lesson — it showed exactly where endpoint protection picks up and where SIEM detection is needed when it doesn't.",
-          "Disabled Defender temporarily, reran the command, and Sysmon captured the full encoded CommandLine. Seeing that in Splunk — the exact base64 string, the hidden window flag, the parent process — made it clear why Sysmon is so valuable for detection.",
-          "The privilege escalation was the most satisfying alert. Adding a fake user to the Administrators group and watching EventCode 4732 fire in Splunk with the account name and group name — that's exactly the kind of alert that would wake someone up at 3am in a real SOC.",
-        ],
-      },
-      {
-        title: "The Password Problem",
-        paragraphs: [
-          "Midway through the project I lost the Splunk admin password. Tried resetting it through the CLI — every method failed because the user database had been wiped when I deleted the passwd file. Eventually recovered by creating a user-seed.conf file with the credentials and restarting Splunk. Lost the saved alerts and dashboard in the process and had to rebuild them from scratch.",
-          "Annoying at the time. But rebuilding from scratch actually reinforced everything — the second time writing the SPL queries was faster and cleaner than the first.",
-        ],
-      },
-      {
-        title: "Building the Dashboard",
-        paragraphs: [
-          "Once all 7 alerts were working, pulling them together into a dashboard made the whole thing feel like a real SOC tool. Seeing failed logon bar charts, PowerShell command tables, privilege escalation entries, and Linux auth counts all in one view — that's what a tier-1 analyst looks at every shift.",
-        ],
-      },
-      {
-        title: "What I Took Away",
-        paragraphs: [
-          "The troubleshooting was 70% of the work. Every error — the binary logs, the isolated VM, the firewall blocks, the lost password — was a real problem that real analysts face. Solving them taught me more than any guided lab would have.",
-          "The other thing that stuck: behavioral detection works where signature detection doesn't. Windows Defender missed the encoded PowerShell until it matched a known signature. Splunk caught it behaviorally — parent process, command flags, execution pattern. That gap is real and bigger than I expected.",
-        ],
-      },
-      {
-        title: "What's Next",
-        list: [
-          "Add Elastic Stack alongside Splunk to compare SIEM detection approaches on the same log data",
-          "Enable command line argument logging so EventCode 4688 captures full process parameters",
-          "Deploy Sysmon network connection logging to detect C2 callbacks",
-          "Build correlation rules that chain multiple alerts together — brute force followed by new user creation followed by privilege escalation as a single incident",
-        ],
-      },
-    ],
-  },
-];
+const CATEGORY_META = {
+  "homelab":                   { label: "Homelab",                            navLabel: "Homelab",                  prefix: "HL",  navOrder: 1, color: "var(--accent)", bg: "var(--accent-light)", desc: "SIEM configuration, DNS forensics, network monitoring, and multi-host SOC environments." },
+  "endpoint":                  { label: "Endpoint Security",                  navLabel: "Endpoint Security",        prefix: "EP",  navOrder: 2, color: "var(--accent)", bg: "var(--accent-light)", desc: "Threat hunting, behavioral analysis, and endpoint forensics using Windows Event Logs and Splunk." },
+  "network-security":          { label: "Network Security",                   navLabel: "Network Security",         prefix: "NS",  navOrder: 3, color: "var(--accent)", bg: "var(--accent-light)", desc: "Packet analysis, network forensics, traffic monitoring, and protocol-level threat detection." },
+  "siem":                      { label: "SIEM",                               navLabel: "SIEM",                     prefix: "SI",  navOrder: 4, color: "var(--accent)", bg: "var(--accent-light)", desc: "Cloud misconfiguration analysis, IAM policy review, and cloud-native threat detection." },
+  "vulnerability-management":  { label: "Vulnerability Management",           navLabel: "Vulnerability Management", prefix: "VM",  navOrder: 5, color: "var(--accent)", bg: "var(--accent-light)", desc: "Memory forensics, disk imaging, timeline analysis, and end-to-end incident response." },
+  "threat-intelligence":       { label: "Threat Intelligence",                navLabel: "Threat Intelligence",      prefix: "TI",  navOrder: 6, color: "var(--accent)", bg: "var(--accent-light)", desc: "CVE analysis, adversary profiling, MITRE ATT&CK mapping, and vulnerability research." },
+  "incident-response":         { label: "Incident Response",                  navLabel: "Incident Response",        prefix: "IR",  navOrder: 7, color: "var(--accent)", bg: "var(--accent-light)", desc: "Building SIEM detection rules, tuning alerts, and reducing false positives in real environments." },
+  "identity-account":          { label: "Identity & Access Management",       navLabel: "Identity & Access",        prefix: "IA",  navOrder: 8, color: "var(--accent)", bg: "var(--accent-light)", desc: "Identity threats, privilege escalation, account persistence, and access control analysis." },
+};
 
-function normalizePath(pathname) {
-  const path = pathname.replace(/\/+$/, "");
-  return path || "/";
+function fileSlug(path) { return path.split("/").pop().replace(".md", ""); }
+function fileCategorySlug(path) { const p = path.split("/"); return p[p.length - 2]; }
+
+function parseEntry(content, path, caseNumber) {
+  const slug = fileSlug(path);
+  const categorySlug = fileCategorySlug(path);
+  const lines = content.split("\n");
+
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  const title = titleMatch ? titleMatch[1].trim() : slug;
+
+  let skills = [], tools = [], date = "", type = "", displayTitle = "";
+  for (const line of lines.slice(0, 15)) {
+    const sm = line.match(/^skills:\s*(.+)$/i);
+    if (sm) skills = sm[1].split(",").map(s => s.trim()).filter(Boolean);
+    const tm = line.match(/^tools:\s*(.+)$/i);
+    if (tm) tools = tm[1].split(",").map(s => s.trim()).filter(Boolean);
+    const dm = line.match(/^date:\s*(.+)$/i);
+    if (dm) date = dm[1].trim();
+    const dtm = line.match(/^display_title:\s*(.+)$/i);
+    if (dtm) displayTitle = dtm[1].trim();
+    const typem = line.match(/^\*\*(LAB|WRITEUP|CVE REPORT)\*\*$/);
+    if (typem) type = typem[1];
+  }
+
+  // Strip frontmatter lines and type markers from rendered content
+  const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let cleanContent = content
+    .replace(/^\*\*(LAB|WRITEUP|CVE REPORT)\*\*\s*$/gim, "")
+    .replace(/^(skills|tools|date|display_title):\s*.*$/gim, "")
+    .replace(new RegExp(`^#\\s+${escapedTitle}\\s*$`, "m"), "")
+    .replace(new RegExp(`^__${escapedTitle}__\\s*$`, "m"), "")
+    .replace(new RegExp(`^\\*\\*${escapedTitle}\\*\\*\\s*$`, "m"), "");
+
+  // Fallback: extract displayTitle from the first bold paragraph in HTML content
+  // (for files converted before display_title: was added to the frontmatter)
+  if (!displayTitle) {
+    const boldMatch = cleanContent.match(/<p[^>]*><strong>([\s\S]*?)<\/strong>/);
+    if (boldMatch) {
+      const candidate = boldMatch[1].replace(/<[^>]+>/g, "").trim();
+      const looksLikeTitle = candidate.length > 8 &&
+        !/^\d+[\.\)]/.test(candidate) &&
+        !/^(Severity|Status|MITRE|Date|Author|Category|Alert|Type|Priority):/i.test(candidate);
+      if (looksLikeTitle) displayTitle = candidate;
+    }
+  }
+  // Strip the doc title paragraph from content (it's now shown as the explicit heading)
+  if (displayTitle) {
+    cleanContent = cleanContent.replace(/<p[^>]*><strong>[\s\S]*?<\/strong>[^<]*<\/p>\s*/, "");
+  }
+
+  let summary = "";
+  let pastTitle = false;
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith("# ")) { pastTitle = true; continue; }
+    if (!pastTitle || !t) continue;
+    if (t.startsWith("#") || t.startsWith("|") || t.startsWith("-") || t.startsWith("*") || t.startsWith("!") || t.startsWith("`") || t === "---" || t.startsWith("**") || t.startsWith("<")) continue;
+    if (/^(skills|tools|date):/i.test(t)) continue;
+    const clean = t.replace(/<[^>]+>/g, "").trim();
+    if (clean.length < 15) continue;
+    summary = clean.length > 180 ? clean.slice(0, 180) + "…" : clean;
+    break;
+  }
+
+  const wordCount = content.split(/\s+/).length;
+  const readTime = Math.max(1, Math.round(wordCount / 220));
+
+  return { title, displayTitle, summary, date, type, skills, tools, content: cleanContent, slug, categorySlug, caseNumber, readTime, link: `/${categorySlug}/${slug}` };
 }
 
+const entriesByCategory = {};
+for (const [path, content] of Object.entries(allFiles)) {
+  const cat = fileCategorySlug(path);
+  if (!entriesByCategory[cat]) entriesByCategory[cat] = [];
+  entriesByCategory[cat].push({ path, content });
+}
+for (const [cat, files] of Object.entries(entriesByCategory)) {
+  const meta = CATEGORY_META[cat] || { prefix: cat.slice(0, 3).toUpperCase() };
+  entriesByCategory[cat] = files.map(({ path, content }, i) =>
+    parseEntry(content, path, `${meta.prefix}-${String(i + 1).padStart(3, "0")}`)
+  );
+}
+
+// All defined categories in nav order (even empty ones)
+const sortedCategorySlugs = Object.keys(CATEGORY_META).sort((a, b) =>
+  CATEGORY_META[a].navOrder - CATEGORY_META[b].navOrder
+);
+
+// ── Routing ──────────────────────────────────────────────
+
+function normalizePath(p) { return p.replace(/\/+$/, "") || "/"; }
 const basePath = normalizePath(import.meta.env.BASE_URL);
 
 function routePath(pathname) {
-  const path = normalizePath(pathname);
-
-  if (basePath === "/") {
-    return path;
-  }
-
-  if (path === basePath) {
-    return "/";
-  }
-
-  if (path.startsWith(`${basePath}/`)) {
-    return normalizePath(path.slice(basePath.length));
-  }
-
-  return path;
+  const p = normalizePath(pathname);
+  if (basePath === "/") return p;
+  if (p === basePath) return "/";
+  if (p.startsWith(`${basePath}/`)) return normalizePath(p.slice(basePath.length));
+  return p;
 }
 
-function browserPath(path) {
-  if (basePath === "/") {
-    return path;
-  }
-
-  return path === "/" ? `${basePath}/` : `${basePath}${path}`;
-}
-
-function pagePath(page) {
-  if (page === "entries") return "/entries";
-  if (page === "research") return "/research";
-  return "/";
+function browserPath(p) {
+  if (basePath === "/") return p;
+  return p === "/" ? `${basePath}/` : `${basePath}${p}`;
 }
 
 function routeFromPath(pathname) {
-  const path = routePath(pathname);
-  const entry = entries.find((item) => item.link === path);
-
-  if (entry) {
-    return { activePage: "entries", selectedEntry: entry };
+  const p = routePath(pathname);
+  if (p === "/") return { view: "overview", categorySlug: null, entry: null };
+  const em = p.match(/^\/([^/]+)\/([^/]+)$/);
+  if (em) {
+    const [, catSlug, entrySlug] = em;
+    const entry = (entriesByCategory[catSlug] || []).find(e => e.slug === entrySlug);
+    if (entry) return { view: "entry", categorySlug: catSlug, entry };
   }
-
-  if (path === "/entries") {
-    return { activePage: "entries", selectedEntry: null };
-  }
-
-  if (path === "/research") {
-    return { activePage: "research", selectedEntry: null };
-  }
-
-  return { activePage: "overview", selectedEntry: null };
+  const cm = p.match(/^\/([^/]+)$/);
+  if (cm && entriesByCategory[cm[1]]) return { view: "category", categorySlug: cm[1], entry: null };
+  return { view: "overview", categorySlug: null, entry: null };
 }
 
-function pushPath(path) {
-  const nextPath = browserPath(path);
-
-  if (normalizePath(window.location.pathname) !== normalizePath(nextPath)) {
-    window.history.pushState({}, "", nextPath);
-  }
+function pushPath(p) {
+  const next = browserPath(p);
+  if (normalizePath(window.location.pathname) !== normalizePath(next)) window.history.pushState({}, "", next);
 }
+
+// ── App ──────────────────────────────────────────────────
 
 function App() {
-  const initialRoute = routeFromPath(window.location.pathname);
-  const [activePage, setActivePage] = useState(initialRoute.activePage);
-  const [selectedEntry, setSelectedEntry] = useState(initialRoute.selectedEntry);
-  const [openingEntry, setOpeningEntry] = useState("");
-  const [entryView, setEntryView] = useState("skim");
+  const [route, setRoute] = useState(() => routeFromPath(window.location.pathname));
   const [theme, setTheme] = useState("light");
+  const [openingEntry, setOpeningEntry] = useState("");
 
   useEffect(() => {
-    function syncRoute() {
-      const nextRoute = routeFromPath(window.location.pathname);
-      setActivePage(nextRoute.activePage);
-      setSelectedEntry(nextRoute.selectedEntry);
-      setEntryView("skim");
-      setOpeningEntry("");
-    }
-
-    window.addEventListener("popstate", syncRoute);
-    return () => window.removeEventListener("popstate", syncRoute);
+    const sync = () => { setRoute(routeFromPath(window.location.pathname)); setOpeningEntry(""); };
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
   }, []);
 
-  function navigate(page) {
-    pushPath(pagePath(page));
-    setSelectedEntry(null);
-    setEntryView("skim");
-    setActivePage(page);
+  function navigateTo(path) {
+    pushPath(path);
+    setRoute(routeFromPath(path));
+    setOpeningEntry("");
+    window.scrollTo(0, 0);
   }
 
   function openEntry(entry) {
-    setOpeningEntry(entry.title);
-    window.setTimeout(() => {
+    setOpeningEntry(entry.slug);
+    setTimeout(() => {
       pushPath(entry.link);
-      setEntryView("skim");
-      setSelectedEntry(entry);
+      setRoute({ view: "entry", categorySlug: entry.categorySlug, entry });
       setOpeningEntry("");
-    }, 360);
+      window.scrollTo(0, 0);
+    }, 300);
   }
 
   return (
-    <div className={`gitlab-app theme-${theme}`}>
-      <Sidebar
-        activePage={activePage}
-        entryView={entryView}
-        selectedEntry={selectedEntry}
-        setEntryView={setEntryView}
-        setActivePage={navigate}
-        setTheme={setTheme}
-        theme={theme}
-      />
-
-      <main className="workspace" id="top">
-        <div
-          className={`content-shell ${
-            activePage === "overview" && !selectedEntry ? "overview-mode" : ""
-          }`}
-        >
-          <div className="breadcrumbs">
-            <span>aparnaa-cybersec</span>
-            <span>/</span>
-            <span>personal-journal</span>
-            <span>/</span>
-            <strong>
-              {selectedEntry
-                ? selectedEntry.title
-                : pageLabel(activePage)}
-            </strong>
-          </div>
-
-          {selectedEntry ? (
-            <EntryPage
-              entry={selectedEntry}
-              entryView={entryView}
-              key={`${selectedEntry.title}-${entryView}`}
-            />
-          ) : (
-            <>
-              <PageHeader activePage={activePage} />
-              {activePage === "overview" && <Overview />}
-              {activePage === "entries" && (
-                <EntryIndex entries={entries} onOpen={openEntry} openingEntry={openingEntry} />
-              )}
-              {activePage === "research" && <ResearchEmpty />}
-            </>
-          )}
-        </div>
+    <div className={`app theme-${theme}`}>
+      <TopBar route={route} navigateTo={navigateTo} theme={theme} setTheme={setTheme} />
+      <SocialLinks />
+      <main className="workspace">
+        {route.view === "overview" && <HomePage navigateTo={navigateTo} />}
+        {route.view === "category" && (
+          <CategoryPage
+            categorySlug={route.categorySlug}
+            entries={entriesByCategory[route.categorySlug] || []}
+            openEntry={openEntry}
+            openingEntry={openingEntry}
+          />
+        )}
+        {route.view === "entry" && <EntryPage entry={route.entry} navigateTo={navigateTo} key={route.entry.slug} />}
       </main>
     </div>
   );
 }
 
-function PageHeader({ activePage }) {
-  if (activePage === "entries") {
-    return (
-      <section className="project-header index-header">
-        <h1>Index</h1>
-        <p>{entries.length} entries</p>
-      </section>
-    );
+// ── Social links ─────────────────────────────────────────
+
+function SocialLinks() {
+  const [toast, setToast] = useState(null);
+  const timerRef = useRef(null);
+  const containerRef = useRef(null);
+
+  function handleCopy(value, e) {
+    const btnRect = e.currentTarget.getBoundingClientRect();
+    const conRect = containerRef.current.getBoundingClientRect();
+    const y = btnRect.top + btnRect.height / 2 - conRect.top;
+    navigator.clipboard?.writeText(value);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setToast({ value, y });
+    timerRef.current = setTimeout(() => setToast(null), 2500);
   }
 
-  if (activePage === "research") {
-    return (
-      <section className="project-header index-header">
-        <h1>Research</h1>
-        <p>Notes and papers</p>
-      </section>
-    );
-  }
+  const links = [
+    {
+      type: "link",
+      href: "https://github.com/aparnaa19",
+      label: "GitHub",
+      icon: (
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+          <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.166 6.839 9.489.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.603-3.369-1.342-3.369-1.342-.454-1.155-1.11-1.462-1.11-1.462-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.202 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.163 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+        </svg>
+      ),
+    },
+    {
+      type: "link",
+      href: "https://www.linkedin.com/in/aparnaa19/",
+      label: "LinkedIn",
+      icon: (
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true">
+          <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+        </svg>
+      ),
+    },
+    {
+      type: "copy",
+      value: "+1 872 899 2174",
+      label: "Phone",
+      icon: (
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 8.81 19.79 19.79 0 01.01 2a2 2 0 012-2.18h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L6.91 7.91a16 16 0 006.18 6.18l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"/>
+        </svg>
+      ),
+    },
+    {
+      type: "copy",
+      value: "aparnaa1902@gmail.com",
+      label: "Email",
+      icon: (
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="4" width="20" height="16" rx="2"/>
+          <path d="M22 7l-10 7L2 7"/>
+        </svg>
+      ),
+    },
+  ];
 
   return (
-    <section className="project-header">
-      <div>
-        <div className="project-kicker">Personal journal</div>
-        <h1>Aparnaa Mahalaxmi Arulljothi</h1>
-        <p>Master's in Cybersecurity - Illinois Institute of Technology</p>
-      </div>
-    </section>
+    <div className="social-links" aria-label="Social links" ref={containerRef}>
+      {links.map(l => l.type === "link"
+        ? (
+          <a key={l.label} href={l.href} className="social-link" aria-label={l.label}
+            target="_blank" rel="noopener noreferrer">
+            {l.icon}
+          </a>
+        ) : (
+          <button key={l.label} className="social-link" aria-label={l.label}
+            onClick={e => handleCopy(l.value, e)}>
+            {l.icon}
+          </button>
+        )
+      )}
+      {toast && (
+        <div className="social-copy-banner" style={{ top: `${toast.y}px` }}>
+          <span className="social-copy-value">{toast.value}</span>
+          <span className="social-copy-tick">✓ copied</span>
+        </div>
+      )}
+    </div>
   );
 }
 
-function pageLabel(page) {
-  if (page === "entries") return "All Entries";
-  if (page === "research") return "Research";
-  return "Overview";
-}
+// ── Top bar ──────────────────────────────────────────────
 
-function Sidebar({ activePage, entryView, selectedEntry, setActivePage, setEntryView, setTheme, theme }) {
+function TopBar({ route, navigateTo, theme, setTheme }) {
   const isDark = theme === "dark";
+  const { view, categorySlug } = route;
+  const [visible, setVisible] = useState(false);
+  const [hidden, setHidden] = useState(false);
+
+  // Entrance: slide in after first paint
+  useEffect(() => {
+    const id = requestAnimationFrame(() => requestAnimationFrame(() => setVisible(true)));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // Auto-hide on scroll down, show on scroll up
+  useEffect(() => {
+    let lastY = window.scrollY;
+    function onScroll() {
+      const y = window.scrollY;
+      setHidden(y > 90 && y > lastY);
+      lastY = y;
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const navStyle = {
+    transform: `translateX(-50%) translateY(${(!visible || hidden) ? "-140%" : "0"})`,
+    opacity: (!visible || hidden) ? 0 : 1,
+    pointerEvents: hidden ? "none" : undefined,
+  };
 
   return (
-    <aside className="sidebar">
-      <button className="project-pill" onClick={() => setActivePage("overview")} type="button">
-        Aparnaa-Journal
-      </button>
-
-      {selectedEntry ? (
-        <>
-          <div className="entry-context">
-            <div className="entry-nav-title">Current Entry</div>
-            <p>{selectedEntry.projectTitle}</p>
-          </div>
-          <nav className="nav-group nav-main entry-nav" aria-label="Entry navigation">
-            <button
-              className={entryView === "skim" ? "active" : ""}
-              onClick={() => setEntryView("skim")}
-              type="button"
-            >
-              <span className="nav-number">1.</span>
-              Skim
-            </button>
-            <button
-              className={entryView === "detailed" ? "active" : ""}
-              onClick={() => setEntryView("detailed")}
-              type="button"
-            >
-              <span className="nav-number">2.</span>
-              Detailed
-            </button>
-            <button
-              className={entryView === "story" ? "active" : ""}
-              onClick={() => setEntryView("story")}
-              type="button"
-            >
-              <span className="nav-number">3.</span>
-              Story
-            </button>
-            {selectedEntry.images && (
-              <button
-                className={entryView === "gallery" ? "active" : ""}
-                onClick={() => setEntryView("gallery")}
-                type="button"
-              >
-                <span className="nav-number">4.</span>
-                Gallery
-              </button>
-            )}
-          </nav>
-          <nav className="nav-group nav-main return-nav" aria-label="Return navigation">
-            <button onClick={() => setActivePage("entries")} type="button">
-              Index
-            </button>
-          </nav>
-        </>
-      ) : (
-        <nav className="nav-group nav-main" aria-label="Journal navigation">
+    <header className="topbar" style={navStyle}>
+      <nav className="topbar-pill" aria-label="Navigation">
+        <button className={view === "overview" ? "active" : ""} onClick={() => navigateTo("/")} type="button">
+          Home
+        </button>
+        {sortedCategorySlugs.map(slug => (
           <button
-            className={activePage === "overview" ? "active" : ""}
-            onClick={() => setActivePage("overview")}
+            key={slug}
+            className={categorySlug === slug ? "active" : ""}
+            onClick={() => navigateTo(`/${slug}`)}
             type="button"
           >
-            <span className="nav-number">1.</span>
-            Overview
+            {(CATEGORY_META[slug] || {}).navLabel || slug}
           </button>
-          <button
-            className={activePage === "entries" ? "active" : ""}
-            onClick={() => setActivePage("entries")}
-            type="button"
-          >
-            <span className="nav-number">2.</span>
-            All Entries
-          </button>
-          <button
-            className={activePage === "research" ? "active" : ""}
-            onClick={() => setActivePage("research")}
-            type="button"
-          >
-            <span className="nav-number">3.</span>
-            Research
-          </button>
-        </nav>
-      )}
-
-      <div className="theme-toggle-row">
-        <span>{isDark ? "Dark" : "Light"}</span>
+        ))}
         <button
           aria-label="Toggle color theme"
           aria-pressed={isDark}
@@ -1224,518 +337,1914 @@ function Sidebar({ activePage, entryView, selectedEntry, setActivePage, setEntry
         >
           <span />
         </button>
-      </div>
-    </aside>
+      </nav>
+    </header>
   );
 }
 
-function Overview() {
-  return (
-    <section className="overview-stack">
-      <article className="readme-simple">
-        <p>
-          This is my working journal - a place where I document what I learned, built, and figured
-          out during my time studying cybersecurity.
-        </p>
-        <p>
-          Every entry is something I actually did - a lab, an investigation, a simulation. I write
-          down what worked, what didn't, and what I'd do differently. I recently graduated from
-          Illinois Institute of Technology with a Master's in Cybersecurity, and most of what's here
-          came from curiosity and a lot of trial and error.
-        </p>
-        <p className="journal-line">
-          I build labs, break things intentionally, document everything, and write about it.
-        </p>
-      </article>
+// ── Home page ─────────────────────────────────────────────
 
-      <article className="panel achievement-card">
-        <div className="panel-heading">
-          <h2>Latest achievement</h2>
-          <span>Research paper</span>
-        </div>
-        <h3>
-          AgentForensics: Exploring the Real-Time Prompt Injection Detection and Forensics Threats
-          in LLM Agents
-        </h3>
-        <p className="muted">SSRN - April 28, 2026</p>
-        <p>
-          An open-source security framework that detects prompt injection attacks in LLM agents in
-          real time - achieving 100% detection on 7,763 injection payloads with zero false
-          positives.
-        </p>
-        <a
-          className="link-button"
-          href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6589479"
-          rel="noreferrer"
-          target="_blank"
-        >
-          Read on SSRN
-        </a>
-      </article>
-    </section>
-  );
+// ── Skill Radar ──────────────────────────────────────────
+// Values are derived from actual entry counts — grows as you document work.
+// Scale: each entry adds ~14 points, capped at 100 (≈7 entries = full axis).
+
+const RS = 380, RCX = 190, RCY = 190, RR = 118, RLEVELS = 5;
+const RING_COLORS = [
+  "rgba(245,228,235,0.48)", "rgba(236,212,224,0.50)",
+  "rgba(225,194,213,0.54)", "rgba(212,174,200,0.57)", "rgba(196,150,185,0.62)",
+];
+
+function rAngle(i, n) { return (2 * Math.PI * i / n) - Math.PI / 2; }
+function rPt(i, frac, n) {
+  const a = rAngle(i, n);
+  return [RCX + RR * frac * Math.cos(a), RCY + RR * frac * Math.sin(a)];
+}
+function rPoly(fracs) {
+  return fracs.map((f, i) => rPt(i, f, fracs.length).join(",")).join(" ");
+}
+function rDataPath(fracs) {
+  const N = fracs.length;
+  const pts = fracs.map((f, i) => rPt(i, f, N));
+  const k = 0.85;
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < N; i++) {
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[(i + 1) % N];
+    const cx = RCX + ((x1 + x2) / 2 - RCX) * k;
+    const cy = RCY + ((y1 + y2) / 2 - RCY) * k;
+    d += ` Q ${cx},${cy} ${x2},${y2}`;
+  }
+  return d + " Z";
+}
+function rRingPath(f, N) {
+  const pts = Array.from({ length: N }, (_, i) => rPt(i, f, N));
+  const k = 0.85; // push midpoint inward for spiderweb sag
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 0; i < N; i++) {
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[(i + 1) % N];
+    const cx = RCX + ((x1 + x2) / 2 - RCX) * k;
+    const cy = RCY + ((y1 + y2) / 2 - RCY) * k;
+    d += ` Q ${cx},${cy} ${x2},${y2}`;
+  }
+  return d + " Z";
 }
 
-function EntryIndex({ entries: visibleEntries, onOpen, openingEntry, subtitle, title }) {
+function SkillRadar({ navigateTo }) {
+  const [hovered, setHovered] = useState(null);
+  const [webProg, setWebProg] = useState(0);
+  const [dataProg, setDataProg] = useState(0);
+
+  useEffect(() => {
+    let start = null, rafId;
+    function step(ts) {
+      if (!start) start = ts;
+      const elapsed = ts - start;
+      // Web grid draws in over 900ms
+      const tw = Math.min(elapsed / 900, 1);
+      setWebProg(1 - Math.pow(1 - tw, 3));
+      // Data shape fades in after 300ms delay, over 1100ms
+      const td = Math.min(Math.max(elapsed - 300, 0) / 1100, 1);
+      setDataProg(1 - Math.pow(1 - td, 3));
+      if (tw < 1 || td < 1) rafId = requestAnimationFrame(step);
+    }
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  // Build axes from real content
+  const axes = sortedCategorySlugs.map(slug => {
+    const meta = CATEGORY_META[slug];
+    const count = (entriesByCategory[slug] || []).length;
+    return {
+      slug,
+      label: meta.navLabel,
+      full: meta.label,
+      count,
+      value: Math.min(100, count * 14),
+    };
+  });
+
+  const N = axes.length;
+  const fracs = axes.map(a => (a.value / 100) * dataProg);
+  const totalEntries = axes.reduce((s, a) => s + a.count, 0);
+
   return (
-    <section className="work-panel" id="journal">
-      {(title || subtitle) && (
-        <div className="index-context">
-          {title && <h2>{title}</h2>}
-          {subtitle && <p>{subtitle}</p>}
-        </div>
-      )}
-      <div className="results-frame" aria-live="polite">
-        {visibleEntries.length === 0 ? (
-          <div className="empty-row">No entries yet</div>
-        ) : (
-          visibleEntries.map((entry) => (
-            <EntryRow
-              entry={entry}
-              isOpening={openingEntry === entry.title}
-              key={entry.title}
-              onOpen={onOpen}
+    <div className="skill-radar-wrap">
+
+      <svg viewBox={`0 0 ${RS} ${RS}`} className="skill-radar-svg"
+        aria-label="Skill coverage radar built from your entries"
+      >
+        <defs>
+          <radialGradient id="skillFill" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor="rgba(124,29,63,0.52)" />
+            <stop offset="100%" stopColor="rgba(124,29,63,0.10)" />
+          </radialGradient>
+          <filter id="radarGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+
+        {/* Web grid scales in from center */}
+        <g transform={`translate(${RCX},${RCY}) scale(${webProg}) translate(${-RCX},${-RCY})`}>
+          {/* Concentric rings — curved sides for spiderweb look */}
+          {Array.from({ length: RLEVELS }, (_, lvl) => (
+            <path key={lvl}
+              d={rRingPath((lvl + 1) / RLEVELS, N)}
+              fill={RING_COLORS[lvl]}
+              stroke="rgba(124,29,63,0.18)" strokeWidth="0.8" />
+          ))}
+          {/* Axis spokes */}
+          {axes.map((_, i) => {
+            const [x, y] = rPt(i, 1, N);
+            return <line key={i} x1={RCX} y1={RCY} x2={x} y2={y}
+              stroke={hovered === i ? "rgba(124,29,63,0.50)" : "rgba(124,29,63,0.16)"}
+              strokeWidth={hovered === i ? 1.5 : 0.75} />;
+          })}
+        </g>
+
+        {/* Glow layer */}
+        <path d={rDataPath(fracs)} fill="rgba(124,29,63,0.20)"
+          filter="url(#radarGlow)" opacity={dataProg} />
+
+        {/* Skill polygon */}
+        <path d={rDataPath(fracs)} fill="url(#skillFill)"
+          stroke="#7C1D3F" strokeWidth="2" opacity={dataProg} />
+
+        {/* Invisible hit-area per axis for click/hover */}
+        {axes.map((ax, i) => {
+          const [x, y] = rPt(i, 1, N);
+          return (
+            <line key={`hit-${i}`} x1={RCX} y1={RCY} x2={x} y2={y}
+              stroke="transparent" strokeWidth="20"
+              style={{ cursor: ax.count > 0 ? "pointer" : "default" }}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => ax.count > 0 && navigateTo(`/${ax.slug}`)}
             />
-          ))
-        )}
+          );
+        })}
+
+        {/* Vertex dots (only where there are entries) */}
+        {axes.map((ax, i) => {
+          if (ax.value === 0) return null;
+          const [x, y] = rPt(i, fracs[i], N);
+          const hov = hovered === i;
+          return (
+            <circle key={i} cx={x} cy={y}
+              r={hov ? 6.5 : 4.5}
+              fill={hov ? "#7C1D3F" : "#A83B5A"} stroke="white"
+              strokeWidth={hov ? 2 : 1.6}
+              className={hov ? "radar-dot-pulse" : ""}
+              style={{ cursor: "pointer", transition: "r 150ms ease, fill 150ms ease" }}
+              onMouseEnter={() => setHovered(i)}
+              onMouseLeave={() => setHovered(null)}
+              onClick={() => navigateTo(`/${ax.slug}`)}
+              opacity={dataProg}
+            />
+          );
+        })}
+
+        {/* Labels */}
+        {axes.map((ax, i) => {
+          const [x, y] = rPt(i, 1.38, N);
+          const hov = hovered === i;
+          const words = ax.label.split(" ");
+          const mid = Math.ceil(words.length / 2);
+          const lines = words.length > 1
+            ? [words.slice(0, mid).join(" "), words.slice(mid).join(" ")]
+            : [ax.label];
+          const fs = hov ? "12" : "10.5";
+          const fill = hov ? "#7C1D3F" : ax.count > 0 ? "rgba(92,74,82,0.90)" : "rgba(92,74,82,0.38)";
+          return (
+            <text key={i} x={x} y={y} textAnchor="middle" dominantBaseline="middle"
+              fontSize={fs} fontWeight="700" fill={fill}
+              fontFamily="Inter, sans-serif"
+              style={{ userSelect: "none", pointerEvents: "none", transition: "font-size 120ms, fill 120ms" }}
+            >
+              {lines.length === 1 ? lines[0] : <>
+                <tspan x={x} dy="-0.65em">{lines[0]}</tspan>
+                <tspan x={x} dy="1.3em">{lines[1]}</tspan>
+              </>}
+            </text>
+          );
+        })}
+      </svg>
+
+      {/* Hover detail */}
+      <div className={`radar-detail${hovered !== null ? " on" : ""}`}>
+        {hovered !== null && (() => {
+          const ax = axes[hovered];
+          return <>
+            <span className="radar-detail-name">{ax.full}</span>
+            <span className="radar-detail-track">
+              <span className="radar-detail-fill" style={{ width: `${ax.value}%` }} />
+            </span>
+            <span className="radar-detail-pct">
+              {ax.count === 0 ? "no entries yet" : `${ax.count} ${ax.count === 1 ? "entry" : "entries"}`}
+            </span>
+          </>;
+        })()}
       </div>
-    </section>
+
+      <p className="radar-total">{totalEntries} {totalEntries === 1 ? "entry" : "entries"} documented</p>
+    </div>
   );
 }
 
-function ResearchEmpty() {
-  return (
-    <section className="research-empty">
-      <div className="research-empty-inner">
-        <h2>Research</h2>
-        <p>Research notes and papers will live here.</p>
-        <div>No research entries yet</div>
-      </div>
-    </section>
-  );
+// ── Knowledge Graph ───────────────────────────────────────
+
+const CAT_GRAPH_COLORS = {
+  "homelab":                  "#2BB8AE",
+  "endpoint":                 "#5FB6F6",
+  "network-security":         "#36CFC9",
+  "siem":                     "#8E7CFF",
+  "vulnerability-management": "#F59E0B",
+  "threat-intelligence":      "#E99A15",
+  "incident-response":        "#6BD17B",
+  "identity-account":         "#E7D6B6",
+};
+
+function hexToRgba(hex, a) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${a})`;
 }
 
-function EntryRow({ entry, isOpening, onOpen }) {
-  function handleClick(event) {
-    const shouldUseBrowserNavigation =
-      event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+const GRAPH_LABEL_ALIASES = [
+  [/windows registry forensics/i, "Registry Forensics"],
+  [/sysmon event id 13/i, "Sysmon"],
+  [/registry run key persistence/i, "Run Key Persistence"],
+  [/winlogon shell hijack/i, "Winlogon Hijack"],
+  [/evtx log parsing/i, "EVTX Parsing"],
+  [/kql threat hunting/i, "KQL Hunting"],
+  [/ioc verification/i, "IOC Verification"],
+  [/mitre att&ck/i, "MITRE ATT&CK"],
+  [/masquerading detection/i, "Masquerading"],
+  [/malicious executable path analysis/i, "Path Analysis"],
+  [/wazuh/i, "Wazuh"],
+  [/elastic.*siem/i, "Elastic SIEM"],
+  [/microsoft sentinel/i, "Sentinel"],
+  [/windows event logs/i, "Windows Logs"],
+  [/privilege escalation/i, "Privilege Escalation"],
+  [/failed login/i, "Failed Logins"],
+  [/brute force/i, "Brute Force"],
+  [/impossible travel/i, "Impossible Travel"],
+  [/port scan/i, "Port Scanning"],
+  [/packet analysis/i, "Packet Analysis"],
+  [/threat hunting/i, "Threat Hunting"],
+  [/incident response/i, "Incident Response"],
+  [/persistence/i, "Persistence"],
+  [/forensics/i, "Forensics"],
+  [/powershell/i, "PowerShell"],
+  [/python/i, "Python"],
+  [/docker/i, "Docker"],
+  [/kibana/i, "Kibana"],
+  [/elasticsearch/i, "Elasticsearch"],
+  [/winlogbeat/i, "Winlogbeat"],
+  [/mitre/i, "MITRE ATT&CK"],
+  [/dns/i, "DNS"],
+];
 
-    if (shouldUseBrowserNavigation) {
+function graphHash(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function graphRand(seed, salt = 0) {
+  let x = (seed + salt * 374761393) >>> 0;
+  x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+  return ((x >>> 0) % 10000) / 10000;
+}
+
+function graphLabel(raw) {
+  const clean = String(raw || "")
+    .replace(/\([^)]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[:;,.]+$/g, "")
+    .trim();
+  if (!clean) return "";
+  const alias = GRAPH_LABEL_ALIASES.find(([pattern]) => pattern.test(clean));
+  if (alias) return alias[1];
+  return clean
+    .replace(/\b(SIEM|EDR|XDR|IAM|IOC|KQL|CVE|EVTX|DNS|MITRE)\b/gi, m => m.toUpperCase())
+    .split(" ")
+    .slice(0, 4)
+    .join(" ");
+}
+
+function graphItemsForEntry(entry) {
+  const tools = (entry.tools || []).map(graphLabel).filter(Boolean);
+  const skills = (entry.skills || []).map(graphLabel).filter(Boolean);
+  return [...new Set([...tools, ...skills])].slice(0, 22);
+}
+
+function buildKnowledgeGraph() {
+  const nodes = [], edges = [];
+  const nodeIdx = {};
+
+  // Tool nodes only — categories are used for color only, not as nodes
+  sortedCategorySlugs.forEach(slug => {
+    (entriesByCategory[slug] || []).forEach(entry => {
+      graphItemsForEntry(entry).forEach(label => {
+        if (nodeIdx[label] === undefined) {
+          const seed = graphHash(`${slug}:${label}`);
+          nodeIdx[label] = nodes.length;
+          nodes.push({
+            id: label, label,
+            catSlug: slug, color: CAT_GRAPH_COLORS[slug] || "#C4627A",
+            seed,
+            nx: 0.08 + graphRand(seed, 1) * 0.84,
+            ny: 0.10 + graphRand(seed, 2) * 0.80,
+            vx: 0, vy: 0, count: 1, categories: new Set([slug]),
+          });
+        } else {
+          const node = nodes[nodeIdx[label]];
+          node.count++;
+          node.categories.add(slug);
+        }
+      });
+    });
+  });
+
+  // Edges: tools that co-occur in the same entry get connected
+  const edgeSet = new Set();
+  sortedCategorySlugs.forEach(slug => {
+    (entriesByCategory[slug] || []).forEach(entry => {
+      const tools = graphItemsForEntry(entry).filter(label => nodeIdx[label] !== undefined);
+      for (let i = 0; i < tools.length; i++) {
+        for (let j = i + 1; j < tools.length; j++) {
+          const a = nodeIdx[tools[i]], b = nodeIdx[tools[j]];
+          const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+          if (!edgeSet.has(key)) {
+            edgeSet.add(key);
+            edges.push({ s: a, t: b, weight: 1 });
+          } else {
+            const edge = edges.find(e => (e.s === a && e.t === b) || (e.s === b && e.t === a));
+            if (edge) edge.weight++;
+          }
+        }
+      }
+    });
+  });
+
+  nodes.forEach(n => { n.degree = 0; });
+  edges.forEach(({ s, t }) => { nodes[s].degree++; nodes[t].degree++; });
+  nodes.forEach(n => {
+    n.categories = Array.from(n.categories);
+    if (n.categories.length > 1) n.color = "#E7D6B6";
+  });
+
+  return { nodes, edges };
+}
+
+function KnowledgeGraph({ navigateTo }) {
+  const canvasRef = useRef(null);
+  const searchRef = useRef("");
+  const [search, setSearch] = useState("");
+  const [tooltip, setTooltip] = useState(null);
+
+  useEffect(() => { searchRef.current = search; }, [search]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const DPR = window.devicePixelRatio || 1;
+    let W, H;
+    const ctx = canvas.getContext("2d");
+
+    function resize() {
+      W = canvas.parentElement.offsetWidth || 960;
+      H = Math.max(620, Math.min(820, window.innerHeight * 0.72));
+      canvas.width = Math.round(W * DPR);
+      canvas.height = Math.round(H * DPR);
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    resize();
+
+    const { nodes, edges } = buildKnowledgeGraph();
+
+    if (nodes.length === 0) {
+      ctx.fillStyle = "rgba(215,215,230,0.4)";
+      ctx.font = "14px Inter,sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("Add tools: in entry frontmatter to populate the graph", W / 2, H / 2);
       return;
     }
 
-    event.preventDefault();
+    // ── Physics constants (friend's reference values) ────────
+    const REP_D = 250, REP_STR = 13800;
+    const SPR_REST = 122, SPR_K = 0.0044;
+    const CTR_K = 0.0022;
+    const DAMP = 0.915, MAX_V = 7.8;
+    const ALPHA_DECAY = 0.986;
+    const WALL = 64, MOUSE_R = 172;
+
+    // Node sizing — small dots, hubs only slightly larger
+    function nodeR(n) {
+      return Math.max(4.2, Math.min(16, 4.5 + Math.sqrt(n.degree + n.count) * 1.42));
+    }
+
+    // Init positions
+    nodes.forEach(n => {
+      n.x = n.nx * W; n.y = n.ny * H;
+      n.vx = 0; n.vy = 0; n.fx = 0; n.fy = 0;
+      n.r = nodeR(n);
+      n.showLabel = n.degree > 2 || n.count > 1 || n.label.length <= 14;
+    });
+
+    // Hex color to rgb components for edge blending
+    function hexRGB(hex) {
+      return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+    }
+
+    // Adjacency list for BFS
+    const adj = nodes.map(() => []);
+    edges.forEach(({ s, t }) => { adj[s].push(t); adj[t].push(s); });
+
+    // ── Physics tick ─────────────────────────────────────────
+    function physicsTick(alpha, dragIdx) {
+      nodes.forEach(n => { n.fx = 0; n.fy = 0; });
+
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const dx = nodes[j].x - nodes[i].x, dy = nodes[j].y - nodes[i].y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+          if (dist < REP_D) {
+            const f = alpha * REP_STR * Math.pow(1 - dist / REP_D, 2) / (dist + 8);
+            const fx = f * dx / dist, fy = f * dy / dist;
+            nodes[i].fx -= fx; nodes[i].fy -= fy;
+            nodes[j].fx += fx; nodes[j].fy += fy;
+          }
+        }
+      }
+
+      edges.forEach(({ s, t, weight }) => {
+        const a = nodes[s], b = nodes[t];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const rest = SPR_REST - Math.min(34, weight * 6);
+        const f = alpha * SPR_K * (dist - rest);
+        const fx = f * dx / dist, fy = f * dy / dist;
+        a.fx += fx; a.fy += fy; b.fx -= fx; b.fy -= fy;
+      });
+
+      nodes.forEach((n, i) => {
+        if (i === dragIdx) return;
+        n.fx += alpha * CTR_K * (W / 2 - n.x);
+        n.fy += alpha * CTR_K * (H / 2 - n.y);
+        if (n.x < WALL) n.fx += alpha * 3.8 * (1 - n.x / WALL);
+        if (n.x > W - WALL) n.fx -= alpha * 3.8 * (1 - (W - n.x) / WALL);
+        if (n.y < WALL) n.fy += alpha * 3.8 * (1 - n.y / WALL);
+        if (n.y > H - WALL) n.fy -= alpha * 3.8 * (1 - (H - n.y) / WALL);
+        n.vx += n.fx;
+        n.vy += n.fy;
+        n.vx *= DAMP; n.vy *= DAMP;
+        const spd = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+        if (spd > MAX_V) { n.vx = n.vx / spd * MAX_V; n.vy = n.vy / spd * MAX_V; }
+        n.x = Math.max(n.r + 8, Math.min(W - n.r - 8, n.x + n.vx));
+        n.y = Math.max(n.r + 8, Math.min(H - n.r - 8, n.y + n.vy));
+      });
+    }
+
+    // 1400 warmup ticks at full alpha, 300 at 0.8
+    for (let i = 0; i < 650; i++) physicsTick(0.92, -1);
+    for (let i = 0; i < 320; i++) physicsTick(0.45, -1);
+
+    // ── BFS wave reveal from highest-degree hubs ─────────────
+    const hubCount = Math.max(3, Math.ceil(nodes.length * 0.15));
+    const hubSet = new Set(
+      nodes.map((_, i) => i)
+        .sort((a, b) => nodes[b].degree - nodes[a].degree)
+        .slice(0, hubCount)
+    );
+    const waveDepth = new Array(nodes.length).fill(-1);
+    const bfsQ = [];
+    nodes.forEach((_, i) => { if (hubSet.has(i)) { waveDepth[i] = 0; bfsQ.push(i); } });
+    for (let head = 0; head < bfsQ.length; head++) {
+      adj[bfsQ[head]].forEach(nb => {
+        if (waveDepth[nb] === -1) { waveDepth[nb] = waveDepth[bfsQ[head]] + 1; bfsQ.push(nb); }
+      });
+    }
+    waveDepth.forEach((v, i) => { if (v === -1) waveDepth[i] = 4; });
+
+    // Wave timing (reference implementation)
+    const WAVE_STARTS  = [0, 260, 1080, 1780, 2260];
+    const WAVE_SPREADS = [180, 900, 620, 420, 280];
+    const NODE_REVEAL  = 420, EDGE_DRAW = 560;
+
+    const revealAt = nodes.map((_, i) => {
+      const w = Math.min(waveDepth[i], 4);
+      return WAVE_STARTS[w] + graphRand(nodes[i].seed, 7) * WAVE_SPREADS[w];
+    });
+
+    // ── Runtime state ────────────────────────────────────────
+    const state = {
+      animStart: null, alpha: 0.14,
+      hovered: null, clicked: null,
+      dragging: null, dragOffX: 0, dragOffY: 0,
+      mouseX: -999, mouseY: -999, lastTooltip: null,
+    };
+    let rafId = null, alive = true;
+
+    function easeOut(t) { return 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3); }
+    function clearGraph() {
+      const grad = ctx.createRadialGradient(W * 0.52, H * 0.52, 40, W * 0.52, H * 0.52, Math.max(W, H) * 0.72);
+      grad.addColorStop(0, "#11100e");
+      grad.addColorStop(1, "#090908");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // ── Draw ─────────────────────────────────────────────────
+    function draw(ts) {
+      if (!alive) return;
+
+      clearGraph();
+
+      const now = ts || performance.now();
+      const { animStart, hovered: hov, clicked } = state;
+      const q = searchRef.current.trim().toLowerCase();
+
+      const prog = nodes.map((_, i) =>
+        animStart ? easeOut((now - animStart - revealAt[i]) / NODE_REVEAL) : 0
+      );
+
+      // Active set (click or search filter)
+      let activeSet = null;
+      if (clicked !== null) {
+        activeSet = new Set([clicked]);
+        adj[clicked].forEach(nb => activeSet.add(nb));
+      }
+      if (q) {
+        if (!activeSet) activeSet = new Set();
+        nodes.forEach((n, i) => {
+          if (n.label.toLowerCase().includes(q)) { activeSet.add(i); adj[i].forEach(nb => activeSet.add(nb)); }
+        });
+      }
+
+      // Edges — reveal after both endpoints appear + EDGE_DRAW delay
+      edges.forEach(({ s, t, weight }) => {
+        const edgeP = animStart
+          ? easeOut((now - animStart - Math.max(revealAt[s], revealAt[t]) - EDGE_DRAW) / EDGE_DRAW)
+          : 0;
+        if (edgeP <= 0) return;
+        const a = nodes[s], b = nodes[t];
+        const isLit = hov === s || hov === t || (clicked !== null && (s === clicked || t === clicked));
+        const isDim = !!(activeSet && !activeSet.has(s) && !activeSet.has(t));
+        const [ra, ga, ba] = hexRGB(a.color), [rb, gb, bb] = hexRGB(b.color);
+        const er = (ra+rb)>>1, eg = (ga+gb)>>1, eb = (ba+bb)>>1;
+        const eAlpha = isDim ? 0.018 : isLit ? 0.34 : 0.105;
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const bend = Math.min(58, 15 + weight * 7);
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        const cx = mx + (-dy / len) * bend * (graphRand(a.seed ^ b.seed, 3) > 0.5 ? 1 : -1);
+        const cy = my + (dx / len) * bend * (graphRand(a.seed ^ b.seed, 4) > 0.5 ? 1 : -1);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.quadraticCurveTo(cx, cy, b.x, b.y);
+        ctx.strokeStyle = `rgba(${er},${eg},${eb},${(eAlpha * edgeP).toFixed(3)})`;
+        ctx.lineWidth = isLit ? 1.35 : Math.min(1.1, 0.45 + weight * 0.06);
+        ctx.stroke();
+      });
+
+      // Nodes
+      nodes.forEach((n, i) => {
+        const p = prog[i]; if (p <= 0) return;
+        const isHov = hov === i;
+        const isDim = !!(activeSet && !activeSet.has(i));
+        const r = n.r * p * (isHov ? 1.18 : 1);
+        const [nr, ng, nb] = hexRGB(n.color);
+        ctx.globalAlpha = isDim ? 0.12 * p : p;
+        ctx.shadowBlur = isDim ? 0 : isHov ? 22 : Math.max(8, n.r * 1.5);
+        ctx.shadowColor = n.color;
+        ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = isDim
+          ? `rgba(${nr},${ng},${nb},0.18)`
+          : `rgba(${nr},${ng},${nb},${isHov ? 1 : 0.92})`;
+        ctx.fill();
+        if (isHov) { ctx.strokeStyle = "rgba(255,255,245,0.95)"; ctx.lineWidth = 1.6; ctx.stroke(); }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+
+        // Label (show for visible, non-dimmed nodes)
+        if (!isDim && p > 0.5 && (n.showLabel || isHov || q)) {
+          ctx.globalAlpha = Math.min(1, (p - 0.5) / 0.5);
+          ctx.shadowColor = "rgba(0,0,0,0.94)"; ctx.shadowBlur = 5;
+          ctx.fillStyle = isHov ? "#F7EFE1" : "rgba(220,211,196,0.92)";
+          ctx.font = `${isHov ? 700 : 600} ${isHov ? 18 : Math.min(17, 12 + n.r * 0.45)}px Inter, system-ui, sans-serif`;
+          ctx.textBaseline = "middle";
+          // Flip label to left side when near right edge to prevent cutoff
+          const labelW = ctx.measureText(n.label).width;
+          const nearRight = n.x + r + 10 + labelW > W - 12;
+          ctx.textAlign = nearRight ? "right" : "left";
+          ctx.fillText(n.label, nearRight ? n.x - r - 8 : n.x + r + 8, n.y);
+          ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+        }
+      });
+
+      // Mouse repulsion
+      if (state.mouseX > 0 && state.dragging === null) {
+        nodes.forEach(n => {
+          const dx = n.x - state.mouseX, dy = n.y - state.mouseY;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          if (dist < MOUSE_R && dist > 1) {
+            const f = 5.2 * Math.pow(1 - dist / MOUSE_R, 2);
+            n.vx += f * dx / dist; n.vy += f * dy / dist;
+          }
+        });
+        state.alpha = Math.max(state.alpha, 0.12);
+      }
+
+      // Settle physics
+      if (state.dragging !== null) {
+        nodes[state.dragging].vx = 0; nodes[state.dragging].vy = 0;
+      }
+      if (state.alpha > 0.001) {
+        physicsTick(state.alpha, state.dragging);
+        state.alpha *= ALPHA_DECAY;
+      }
+
+      rafId = requestAnimationFrame(draw);
+    }
+
+    // ── IntersectionObserver — BFS grow-in on scroll ─────────
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && !state.animStart)
+        state.animStart = performance.now();
+    }, { threshold: 0.15 });
+    observer.observe(canvas.parentElement);
+    rafId = requestAnimationFrame(draw);
+
+    // ── Interaction ──────────────────────────────────────────
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (e.clientX - rect.left) * (W / rect.width), y: (e.clientY - rect.top) * (H / rect.height) };
+    }
+    function findNode(x, y) {
+      for (let i = nodes.length - 1; i >= 0; i--)
+        if (Math.hypot(nodes[i].x - x, nodes[i].y - y) < Math.max(nodes[i].r * 1.9, 15)) return i;
+      return null;
+    }
+    function updateTooltip(i) {
+      const next = i === null ? null : {
+        label: nodes[i].label,
+        connections: nodes[i].degree,
+        x: nodes[i].x,
+        y: nodes[i].y,
+      };
+      const prev = state.lastTooltip;
+      if ((!prev && !next) || (prev && next && prev.label === next.label && Math.abs(prev.x - next.x) < 2 && Math.abs(prev.y - next.y) < 2)) return;
+      state.lastTooltip = next;
+      setTooltip(next);
+    }
+    function onMouseMove(e) {
+      const { x, y } = getPos(e);
+      state.mouseX = x; state.mouseY = y;
+      if (state.dragging !== null) {
+        nodes[state.dragging].x = Math.max(nodes[state.dragging].r, Math.min(W - nodes[state.dragging].r, x + state.dragOffX));
+        nodes[state.dragging].y = Math.max(nodes[state.dragging].r, Math.min(H - nodes[state.dragging].r, y + state.dragOffY));
+        updateTooltip(state.dragging);
+        canvas.style.cursor = "grabbing";
+      } else {
+        state.hovered = findNode(x, y);
+        updateTooltip(state.hovered);
+        canvas.style.cursor = state.hovered !== null ? "pointer" : "default";
+      }
+    }
+    function onMouseDown(e) {
+      const { x, y } = getPos(e);
+      const i = findNode(x, y);
+      if (i !== null) { state.dragging = i; state.dragOffX = nodes[i].x - x; state.dragOffY = nodes[i].y - y; e.preventDefault(); }
+    }
+    function onMouseUp() {
+      if (state.dragging !== null) { state.alpha = Math.max(state.alpha, 0.12); state.dragging = null; }
+    }
+    function onClick(e) {
+      const { x, y } = getPos(e);
+      const i = findNode(x, y);
+      if (i !== null) state.clicked = state.clicked === i ? null : i;
+      else state.clicked = null;
+    }
+    function onLeave() { state.hovered = null; state.mouseX = -999; updateTooltip(null); canvas.style.cursor = "default"; }
+    function onResize() {
+      resize();
+      nodes.forEach(n => { n.x = Math.max(n.r+4, Math.min(W-n.r-4, n.x)); n.y = Math.max(n.r+4, Math.min(H-n.r-4, n.y)); });
+    }
+
+    canvas.addEventListener("mousemove", onMouseMove);
+    canvas.addEventListener("mousedown", onMouseDown);
+    canvas.addEventListener("mouseup", onMouseUp);
+    canvas.addEventListener("click", onClick);
+    canvas.addEventListener("mouseleave", onLeave);
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      alive = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      observer.disconnect();
+      canvas.removeEventListener("mousemove", onMouseMove);
+      canvas.removeEventListener("mousedown", onMouseDown);
+      canvas.removeEventListener("mouseup", onMouseUp);
+      canvas.removeEventListener("click", onClick);
+      canvas.removeEventListener("mouseleave", onLeave);
+      window.removeEventListener("resize", onResize);
+      setTooltip(null);
+    };
+  }, [navigateTo]);
+
+  const activeCats = sortedCategorySlugs.filter(s => (entriesByCategory[s] || []).length > 0);
+
+  return (
+    <div className="graph-section-inner">
+      <div className="graph-header-row">
+        <div>
+          <div className="graph-eyebrow">KNOWLEDGE GRAPH</div>
+          <h2 className="graph-title-h2">
+            Skills &amp; Expertise
+            <span className="graph-tagline">Scroll into view — the graph grows like a web</span>
+          </h2>
+        </div>
+        <div className="graph-right-controls">
+          <input
+            className="graph-search-input"
+            type="text"
+            placeholder="Search tools..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <button className="graph-reset-btn" onClick={() => setSearch("")} type="button">Reset</button>
+        </div>
+      </div>
+      <div className="graph-canvas-wrap">
+        <canvas ref={canvasRef} className="knowledge-graph-canvas" />
+        {activeCats.length > 0 && (
+          <div className="graph-legend">
+            {activeCats.map(slug => (
+              <div key={slug} className="graph-legend-item">
+                <span className="graph-legend-dot" style={{ background: CAT_GRAPH_COLORS[slug] || "#C4627A" }} />
+                <span>{CATEGORY_META[slug].navLabel}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {tooltip && (
+          <div className="graph-tooltip" style={{ left: `${tooltip.x}px`, top: `${tooltip.y}px` }}>
+            <span>{tooltip.label}</span>
+            <span>&middot;</span>
+            <span>{tooltip.connections} {tooltip.connections === 1 ? "connection" : "connections"}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function KnowledgeGraphReference() {
+  const canvasRef = useRef(null);
+  const wrapRef = useRef(null);
+  const searchRef = useRef("");
+  const [search, setSearch] = useState("");
+
+  useEffect(() => { searchRef.current = search; }, [search]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const source = buildKnowledgeGraph();
+    const graphNodes = source.nodes.map(n => ({
+      id: n.label,
+      cat: n.catSlug,
+      w: Math.max(0.9, Math.min(2.4, 0.75 + Math.sqrt((n.degree || 0) + (n.count || 1)) * 0.18)),
+    }));
+    const graphEdges = source.edges.map(e => [source.nodes[e.s].label, source.nodes[e.t].label]);
+    const nodeIdx = {};
+    graphNodes.forEach((s, i) => { nodeIdx[s.id] = i; });
+
+    const catRgb = {};
+    Object.entries(CAT_GRAPH_COLORS).forEach(([slug, hex]) => {
+      catRgb[slug] = {
+        hex,
+        r: parseInt(hex.slice(1, 3), 16),
+        g: parseInt(hex.slice(3, 5), 16),
+        b: parseInt(hex.slice(5, 7), 16),
+      };
+    });
+
+    const neighborSets = {};
+    graphNodes.forEach(s => { neighborSets[s.id] = new Set(); });
+    graphEdges.forEach(([a, b]) => {
+      if (neighborSets[a]) neighborSets[a].add(b);
+      if (neighborSets[b]) neighborSets[b].add(a);
+    });
+
+    const hubIds = new Set(
+      [...graphNodes]
+        .sort((a, b) => (neighborSets[b.id]?.size || 0) - (neighborSets[a.id]?.size || 0))
+        .slice(0, Math.min(8, graphNodes.length))
+        .map(n => n.id)
+    );
+
+    const totalEntryMs = 6000;
+    const nodeRevealMs = 380;
+    const edgeDrawMs = 460;
+    const alphaDecay = 0.992;
+    const alphaMin = 0.001;
+    const alphaMouse = 0.22;
+    const baseR = 3.0;
+
+    let W = 0, H = 0, dpr = 1;
+    let nodes = [];
+    let mouse = { x: -9999, y: -9999, active: false };
+    let selectedId = null;
+    let hoveredId = null;
+    let rafId = null;
+    let alpha = 1.0;
+    let entryProgress = 0;
+    let entryStartTime = null;
+    let entryElapsed = 0;
+    let entryTriggered = false;
+    let dragId = null, dragOffX = 0, dragOffY = 0, didDrag = false;
+    let edgeSignals = [];
+    let ripples = [];
+    let searchIds = new Set();
+    let resizeTimer = null;
+    let observer = null;
+    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function nodeRevealP(n) {
+      if (entryProgress >= 1) return 1;
+      return Math.min(1, Math.max(0, (entryElapsed - (n._revealAt || 0)) / nodeRevealMs));
+    }
+
+    function nodeRevealEase(n) {
+      const p = nodeRevealP(n);
+      return p <= 0 ? 0 : p >= 1 ? 1 : 1 - Math.pow(1 - p, 3);
+    }
+
+    function edgeRevealP(na, nb) {
+      if (entryProgress >= 1) return 1;
+      const drawAt = Math.max(na._revealAt || 0, nb._revealAt || 0) + nodeRevealMs * 0.5;
+      return Math.min(1, Math.max(0, (entryElapsed - drawAt) / edgeDrawMs));
+    }
+
+    function tick(forceAlpha) {
+      const ca = forceAlpha != null ? forceAlpha : mouse.active ? Math.max(alpha, alphaMouse) : alpha;
+      if (ca < alphaMin) return;
+
+      const N = nodes.length;
+      const maxV = 1.6, damp = 0.88;
+      const repD = 320, repStr = 4200;
+      const sprRest = 205, sprK = 0.002;
+      const ctrK = 0.0022;
+      const mouseR = 165, mouseF = 2.0;
+
+      for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+          const dx = nodes[j].x - nodes[i].x;
+          const dy = nodes[j].y - nodes[i].y;
+          const d2 = dx * dx + dy * dy;
+          const endpointPair = nodes[i].cat === "endpoint" && nodes[j].cat === "endpoint";
+          const pairRepD = endpointPair ? 390 : repD;
+          if (d2 > pairRepD * pairRepD) continue;
+          const d3 = Math.sqrt(d2) * d2 || 1;
+          const f = ca * (endpointPair ? 7200 : repStr) / d3;
+          nodes[i].vx -= dx * f; nodes[i].vy -= dy * f;
+          nodes[j].vx += dx * f; nodes[j].vy += dy * f;
+        }
+      }
+
+      graphEdges.forEach(([eA, eB]) => {
+        const ni = nodeIdx[eA], nj = nodeIdx[eB];
+        if (ni == null || nj == null) return;
+        const na = nodes[ni], nb = nodes[nj];
+        const dx = nb.x - na.x, dy = nb.y - na.y;
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const endpointEdge = na.cat === "endpoint" && nb.cat === "endpoint";
+        const f = ca * (endpointEdge ? sprK * 0.76 : sprK) * (d - (endpointEdge ? sprRest + 18 : sprRest)) / d;
+        na.vx += dx * f; na.vy += dy * f;
+        nb.vx -= dx * f; nb.vy -= dy * f;
+      });
+
+      const cx = W / 2 - 120, cy = H * 0.48;
+      nodes.forEach(n => {
+        n.vx += (cx - n.x) * ctrK * ca;
+        n.vy += (cy - n.y) * ctrK * ca;
+      });
+      nodes.forEach(n => {
+        if (!n.rightWing) return;
+        n.vx += (W * 0.76 - n.x) * 0.0017 * ca;
+        n.vy += (H * 0.50 - n.y) * 0.00035 * ca;
+      });
+      nodes.forEach(n => {
+        if (n.cat !== "endpoint") return;
+        n.vx += (W * 0.58 - n.x) * 0.00065 * ca;
+        n.vy += (H * 0.58 - n.y) * 0.00028 * ca;
+      });
+
+      const catK = forceAlpha != null ? 0.006 : 0;
+      if (catK > 0) {
+        const catSum = {};
+        nodes.forEach(n => {
+          if (!catSum[n.cat]) catSum[n.cat] = { sx: 0, sy: 0, cnt: 0 };
+          catSum[n.cat].sx += n.x; catSum[n.cat].sy += n.y; catSum[n.cat].cnt++;
+        });
+        nodes.forEach(n => {
+          const s = catSum[n.cat];
+          if (!s || s.cnt < 2) return;
+          n.vx += (s.sx / s.cnt - n.x) * catK * ca;
+          n.vy += (s.sy / s.cnt - n.y) * catK * ca;
+        });
+      }
+
+      if (mouse.active) {
+        nodes.forEach(n => {
+          const dx = n.x - mouse.x, dy = n.y - mouse.y;
+          const d = Math.sqrt(dx * dx + dy * dy) || 1;
+          if (d < mouseR) {
+            const f = mouseF * (1 - d / mouseR) / d;
+            n.vx += dx * f; n.vy += dy * f;
+          }
+        });
+      }
+
+      const wallZone = 150, wallK = 2.2;
+      nodes.forEach(n => {
+        if (n.x < wallZone) n.vx += wallK * Math.pow(1 - n.x / wallZone, 2) * ca;
+        if (n.x > W - wallZone) n.vx -= wallK * Math.pow(1 - (W - n.x) / wallZone, 2) * ca;
+        if (n.y < wallZone) n.vy += wallK * Math.pow(1 - n.y / wallZone, 2) * ca;
+        if (n.y > H - wallZone) n.vy -= wallK * Math.pow(1 - (H - n.y) / wallZone, 2) * ca;
+      });
+
+      nodes.forEach(n => {
+        n.vx *= damp; n.vy *= damp;
+        const spd = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+        if (spd > maxV) { n.vx *= maxV / spd; n.vy *= maxV / spd; }
+        n.x += n.vx; n.y += n.vy;
+        const hard = 20;
+        if (n.x < hard) { n.x = hard; if (n.vx < 0) n.vx *= -0.3; }
+        if (n.x > W - hard) { n.x = W - hard; if (n.vx > 0) n.vx *= -0.3; }
+        if (n.y < hard) { n.y = hard; if (n.vy < 0) n.vy *= -0.3; }
+        if (n.y > H - hard) { n.y = H - hard; if (n.vy > 0) n.vy *= -0.3; }
+      });
+
+      if (forceAlpha == null && !mouse.active) alpha = Math.max(alpha * alphaDecay, 0);
+    }
+
+    function initNodes() {
+      const cx = W / 2 - 120, cy = H * 0.48;
+      const spreadX = W * 0.52;
+      const spreadY = H * 0.32;
+      const N = graphNodes.length;
+      nodes = graphNodes.map((s, i) => {
+        const angle = (i / N) * Math.PI * 2;
+        const r = 0.35 + graphRand(graphHash(s.id), 2) * 0.65;
+        return {
+          id: s.id,
+          cat: s.cat,
+          x: cx + Math.cos(angle) * spreadX * r,
+          y: cy + Math.sin(angle) * spreadY * r,
+          vx: 0,
+          vy: 0,
+          radius: baseR * Math.max(0.85, Math.min(2.8, 0.55 + (neighborSets[s.id]?.size || 1) * 0.11)),
+        };
+      });
+
+      for (let i = 0; i < 1400; i++) tick(1.0);
+      const edgeBand = 150;
+      nodes.forEach(n => {
+        if (n.y < edgeBand) n.y = edgeBand + graphRand(graphHash(n.id), 3) * 60;
+        if (n.y > H - edgeBand) n.y = H - edgeBand - graphRand(graphHash(n.id), 4) * 60;
+      });
+      for (let i = 0; i < 300; i++) tick(0.8);
+      nodes.forEach(n => {
+        n.rightWing = n.x > W * 0.43;
+        if (n.rightWing) n.x = Math.min(W - 42, n.x + W * 0.13);
+      });
+      alpha = 0;
+
+      nodes.forEach(n => { n._wave = null; });
+      const bfsQ = [];
+      [...hubIds].forEach(id => {
+        const n = nodes[nodeIdx[id]];
+        if (n && n._wave == null) { n._wave = 0; bfsQ.push(id); }
+      });
+      let bfsI = 0;
+      while (bfsI < bfsQ.length) {
+        const currId = bfsQ[bfsI++];
+        const currWave = nodes[nodeIdx[currId]]._wave;
+        (neighborSets[currId] || new Set()).forEach(nbId => {
+          const nb = nodes[nodeIdx[nbId]];
+          if (nb && nb._wave == null) { nb._wave = currWave + 1; bfsQ.push(nbId); }
+        });
+      }
+      nodes.forEach(n => { if (n._wave == null) n._wave = 6; });
+
+      const waveGroups = {};
+      nodes.forEach(n => { if (!waveGroups[n._wave]) waveGroups[n._wave] = []; waveGroups[n._wave].push(n); });
+      const waveStarts = [0, 630, 3580, 4780, 5270];
+      const waveSpreads = [260, 2850, 1100, 415, 185];
+      Object.keys(waveGroups).map(Number).sort((a, b) => a - b).forEach((w, wi) => {
+        const group = waveGroups[w];
+        const start = waveStarts[Math.min(wi, waveStarts.length - 1)];
+        const spread = waveSpreads[Math.min(wi, waveSpreads.length - 1)];
+        group.forEach((n, i) => { n._revealAt = start + (group.length > 1 ? (i / (group.length - 1)) * spread : 0); });
+      });
+    }
+
+    function resize() {
+      if (!entryTriggered) { entryProgress = 0; entryStartTime = null; entryElapsed = 0; }
+      W = wrap.clientWidth || 800;
+      H = wrap.clientHeight || 540;
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      initNodes();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      const hasSel = selectedId !== null;
+      const cx0 = W / 2 - 120, cy0 = H / 2;
+      const isGraphLight = false;
+
+      graphEdges.forEach(([a, b]) => {
+        const ni = nodeIdx[a], nj = nodeIdx[b];
+        if (ni == null || nj == null) return;
+        const na = nodes[ni], nb = nodes[nj];
+        const aeE = nodeRevealEase(na), beE = nodeRevealEase(nb);
+        const ep = edgeRevealP(na, nb);
+        if (ep <= 0) return;
+
+        let edgeAlpha;
+        if (hasSel) edgeAlpha = (a === selectedId || b === selectedId) ? 0.55 : 0.04;
+        else {
+          const d = Math.hypot(nb.x - na.x, nb.y - na.y);
+          edgeAlpha = 0.24 * Math.max(0, 1 - d / 420);
+          if (edgeAlpha < 0.006) return;
+        }
+
+        const isHubEdge = hubIds.has(a) && hubIds.has(b);
+        const isSemiHub = hubIds.has(a) || hubIds.has(b);
+        ctx.lineWidth = isGraphLight
+          ? (isHubEdge ? 2.6 : isSemiHub ? 2.0 : 1.35)
+          : (isHubEdge ? 2.0 : isSemiHub ? 1.5 : 1.0);
+        const cat = catRgb[na.cat] || { r: 196, g: 149, b: 106 };
+        const visibleEdgeAlpha = Math.min(0.72, edgeAlpha * 2.25);
+        ctx.strokeStyle = isGraphLight
+          ? `rgba(${cat.r},${cat.g},${cat.b},${visibleEdgeAlpha})`
+          : `rgba(${Math.min(255, cat.r + 50)},${Math.min(255, cat.g + 50)},${Math.min(255, cat.b + 50)},${edgeAlpha})`;
+
+        const ax = cx0 + (na.x - cx0) * aeE, ay = cy0 + (na.y - cy0) * aeE;
+        const bx = cx0 + (nb.x - cx0) * beE, by = cy0 + (nb.y - cy0) * beE;
+        const mx = (ax + bx) / 2, my = (ay + by) / 2;
+        const len = Math.hypot(bx - ax, by - ay) || 1;
+        const curve = ((ni + nj) % 2 === 0) ? 14 : -14;
+        const cpx = mx - (by - ay) / len * curve, cpy = my + (bx - ax) / len * curve;
+
+        ctx.beginPath();
+        if (ep >= 1) {
+          ctx.moveTo(ax, ay);
+          ctx.quadraticCurveTo(cpx, cpy, bx, by);
+          ctx.stroke();
+        } else {
+          const fwd = (na._revealAt || 0) <= (nb._revealAt || 0);
+          const sx = fwd ? ax : bx, sy = fwd ? ay : by;
+          const ex = fwd ? bx : ax, ey = fwd ? by : ay;
+          const q0x = sx + (cpx - sx) * ep, q0y = sy + (cpy - sy) * ep;
+          const q1x = cpx + (ex - cpx) * ep, q1y = cpy + (ey - cpy) * ep;
+          const rx = q0x + (q1x - q0x) * ep, ry = q0y + (q1y - q0y) * ep;
+          ctx.moveTo(sx, sy);
+          ctx.quadraticCurveTo(q0x, q0y, rx, ry);
+          ctx.stroke();
+          const grd = ctx.createRadialGradient(rx, ry, 0, rx, ry, 5);
+          grd.addColorStop(0, `rgba(${Math.min(255, cat.r + 80)},${Math.min(255, cat.g + 80)},${Math.min(255, cat.b + 80)},0.95)`);
+          grd.addColorStop(1, `rgba(${cat.r},${cat.g},${cat.b},0)`);
+          ctx.fillStyle = grd;
+          ctx.beginPath();
+          ctx.arc(rx, ry, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      });
+
+      if (entryProgress >= 1) {
+        edgeSignals.forEach(sig => {
+          const ni = nodeIdx[sig.a], nj = nodeIdx[sig.b];
+          if (ni == null || nj == null) return;
+          const na = nodes[ni], nb = nodes[nj];
+          const ax = cx0 + (na.x - cx0) * nodeRevealEase(na), ay = cy0 + (na.y - cy0) * nodeRevealEase(na);
+          const bx = cx0 + (nb.x - cx0) * nodeRevealEase(nb), by = cy0 + (nb.y - cy0) * nodeRevealEase(nb);
+          const emx = (ax + bx) / 2, emy = (ay + by) / 2;
+          const elen = Math.hypot(bx - ax, by - ay) || 1;
+          const ecurve = ((ni + nj) % 2 === 0) ? 14 : -14;
+          const cpx = emx - (by - ay) / elen * ecurve;
+          const cpy = emy + (bx - ax) / elen * ecurve;
+          const t = sig.t;
+          const px = (1 - t) * (1 - t) * ax + 2 * (1 - t) * t * cpx + t * t * bx;
+          const py = (1 - t) * (1 - t) * ay + 2 * (1 - t) * t * cpy + t * t * by;
+          const cat = catRgb[na.cat] || { r: 196, g: 149, b: 106 };
+          const grd = ctx.createRadialGradient(px, py, 0, px, py, 3.5);
+          grd.addColorStop(0, `rgba(${cat.r},${cat.g},${cat.b},0.95)`);
+          grd.addColorStop(1, `rgba(${cat.r},${cat.g},${cat.b},0)`);
+          ctx.fillStyle = grd;
+          ctx.beginPath();
+          ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      ctx.textBaseline = "middle";
+      const pulseT = Date.now() / 1000;
+      const idleGlow = !mouse.active && entryProgress >= 1 && !hasSel;
+      const activeSearch = searchIds.size > 0;
+
+      nodes.forEach(n => {
+        const cat = catRgb[n.cat] || { hex: "#D8C8A8", r: 216, g: 200, b: 168 };
+        const isSel = n.id === selectedId;
+        const isNeighbor = hasSel && neighborSets[selectedId]?.has(n.id);
+        const dimmed = hasSel && !(isSel || isNeighbor);
+        const isHub = hubIds.has(n.id);
+        const nEase = nodeRevealEase(n);
+        const nProg = nodeRevealP(n);
+        const drawX = cx0 + (n.x - cx0) * nEase;
+        const drawY = cy0 + (n.y - cy0) * nEase;
+        const entryScale = nProg < 1 ? 0.2 + 0.8 * nProg : 1;
+        const dotR = (isSel ? n.radius * 1.65 : n.radius) * entryScale;
+        const hubPulse = isHub && idleGlow ? 1 + (Math.sin(pulseT * 1.5 + n.x * 0.008) * 0.5 + 0.5) * 0.65 : 1;
+        const isSearchMatch = searchIds.has(n.id);
+        const glowMult = activeSearch ? (isSearchMatch ? 2.6 : 0.32) : 1;
+
+        if (!dimmed) {
+          const glowBase = dotR * (isSel ? 5.5 : isNeighbor ? 4.5 : isHub ? 4.0 : 3.0);
+          const glowR = glowBase * (isHub && idleGlow ? hubPulse : 1) * (isSearchMatch ? 1.5 : 1);
+          const glowA = (isSel ? 0.34 : isNeighbor ? 0.22 : isHub ? 0.20 : 0.12) * entryScale * glowMult;
+          const grd = ctx.createRadialGradient(drawX, drawY, 0, drawX, drawY, glowR);
+          grd.addColorStop(0, `rgba(${cat.r},${cat.g},${cat.b},${glowA})`);
+          grd.addColorStop(1, `rgba(${cat.r},${cat.g},${cat.b},0)`);
+          ctx.fillStyle = grd;
+          ctx.beginPath();
+          ctx.arc(drawX, drawY, glowR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.globalAlpha = dimmed ? 0.12 : (activeSearch && !isSearchMatch ? entryScale * 0.55 : entryScale);
+        ctx.fillStyle = cat.hex;
+        ctx.beginPath();
+        ctx.arc(drawX, drawY, dotR, 0, Math.PI * 2);
+        ctx.fill();
+        if (isSel) {
+          ctx.globalAlpha = 0.6;
+          ctx.strokeStyle = cat.hex;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(drawX, drawY, dotR + 5, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+        }
+        ctx.globalAlpha = 1;
+
+        if (nProg > 0.55) {
+          const labelFade = Math.min(1, (nProg - 0.55) / 0.35);
+          const lA = (dimmed ? 0.10 : 0.86) * labelFade;
+          const lx = drawX + dotR + 5;
+          const ly = drawY;
+          ctx.font = isHub ? "700 13px Inter,system-ui,sans-serif" : "500 12px Inter,system-ui,sans-serif";
+          const tw = ctx.measureText(n.id).width;
+          if (!dimmed) {
+            ctx.globalAlpha = 0.60 * labelFade;
+            ctx.fillStyle = isGraphLight ? "rgba(255,252,247,0.82)" : "rgba(16,13,10,0.82)";
+            ctx.beginPath();
+            ctx.roundRect(lx - 3, ly - 7, tw + 6, 14, 3);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+          ctx.fillStyle = isGraphLight ? `rgba(42,23,32,${lA})` : `rgba(240,228,210,${lA})`;
+          ctx.fillText(n.id, lx, ly);
+          ctx.globalAlpha = 1;
+        }
+      });
+
+      if (searchIds.size > 0) {
+        const pulse = Math.sin(pulseT * 3.0) * 0.5 + 0.5;
+        searchIds.forEach(sid => {
+          const sn = nodes[nodeIdx[sid]];
+          if (!sn) return;
+          const rx = cx0 + (sn.x - cx0) * nodeRevealEase(sn);
+          const ry = cy0 + (sn.y - cy0) * nodeRevealEase(sn);
+          const cat = catRgb[sn.cat] || { r: 216, g: 200, b: 168 };
+          ctx.globalAlpha = 0.28 + pulse * 0.55;
+          ctx.strokeStyle = `rgba(${Math.min(255, cat.r + 90)},${Math.min(255, cat.g + 90)},${Math.min(255, cat.b + 90)},1)`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(rx, ry, sn.radius + 4 + pulse * 6, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+        ctx.globalAlpha = 1;
+      }
+
+      ripples.forEach(rip => {
+        const n = nodes[nodeIdx[rip.id]];
+        if (!n) return;
+        const rx = cx0 + (n.x - cx0) * nodeRevealEase(n);
+        const ry = cy0 + (n.y - cy0) * nodeRevealEase(n);
+        const cat = catRgb[n.cat] || { r: 216, g: 200, b: 168 };
+        const ease = 1 - Math.pow(1 - rip.t, 2);
+        [[ease, 0.78, 2.0, 58], [Math.pow(rip.t, 0.7), 0.28, 1.0, 90]].forEach(([e, maxA, lw, spread]) => {
+          const a = maxA * (1 - e);
+          if (a < 0.01) return;
+          ctx.globalAlpha = a;
+          ctx.strokeStyle = `rgba(${Math.min(255, cat.r + 90)},${Math.min(255, cat.g + 90)},${Math.min(255, cat.b + 90)},1)`;
+          ctx.lineWidth = lw;
+          ctx.beginPath();
+          ctx.arc(rx, ry, n.radius + spread * e, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+        ctx.globalAlpha = 1;
+      });
+
+      if (hoveredId !== null && !hasSel && entryProgress >= 1) {
+        const n = nodes[nodeIdx[hoveredId]];
+        if (n) {
+          const tdx = cx0 + (n.x - cx0) * nodeRevealEase(n);
+          const tdy = cy0 + (n.y - cy0) * nodeRevealEase(n);
+          const count = neighborSets[hoveredId]?.size ?? 0;
+          const label = `${n.id}  \u00b7  ${count} connection${count !== 1 ? "s" : ""}`;
+          ctx.font = "500 11px Inter, system-ui, sans-serif";
+          const tw = ctx.measureText(label).width;
+          const px = 10, py = 5;
+          let tx = tdx + n.radius + 12;
+          let ty = tdy - 16;
+          if (tx + tw + px * 2 > W - 6) tx = tdx - tw - px * 2 - n.radius - 12;
+          if (ty - py < 4) ty = tdy + 12;
+          ctx.fillStyle = isGraphLight ? "rgba(42,23,32,0.92)" : "rgba(255,252,245,0.92)";
+          ctx.beginPath();
+          ctx.roundRect(tx - px, ty - py, tw + px * 2, 22, 6);
+          ctx.fill();
+          ctx.fillStyle = isGraphLight ? "rgba(255,252,245,1)" : "rgba(20,16,10,1)";
+          ctx.fillText(label, tx, ty + 6);
+        }
+      }
+    }
+
+    function idleGlowActive() {
+      return !mouse.active && entryProgress >= 1 && selectedId === null;
+    }
+
+    function loop() {
+      if (!entryTriggered) {
+        rafId = requestAnimationFrame(loop);
+        return;
+      }
+      if (entryStartTime === null) entryStartTime = performance.now();
+      entryElapsed = Math.min(totalEntryMs, performance.now() - entryStartTime);
+      entryProgress = entryElapsed / totalEntryMs;
+      const cur = mouse.active ? Math.max(alpha, alphaMouse) : alpha;
+      if (cur >= alphaMin || entryProgress < 1 || idleGlowActive()) tick();
+      if (entryProgress >= 1) {
+        if (Math.random() < 0.10 && edgeSignals.length < 22) {
+          const idx = Math.floor(Math.random() * graphEdges.length);
+          const [ea, eb] = graphEdges[idx];
+          if (nodeIdx[ea] != null && nodeIdx[eb] != null) edgeSignals.push({ a: ea, b: eb, t: 0, spd: 0.0008 + Math.random() * 0.0012 });
+        }
+        edgeSignals = edgeSignals.filter(s => { s.t += s.spd; return s.t < 1.0; });
+      }
+      ripples = ripples.filter(r => { r.t += 0.025; return r.t < 1.0; });
+      draw();
+      rafId = requestAnimationFrame(loop);
+    }
+
+    function findDrawNode(mx, my, loose = 50) {
+      let found = null, minD = Infinity;
+      nodes.forEach(n => {
+        const dx = W / 2 + (n.x - W / 2) * nodeRevealEase(n);
+        const dy = H / 2 + (n.y - H / 2) * nodeRevealEase(n);
+        const d = Math.hypot(dx - mx, dy - my);
+        if (d < n.radius + loose && d < minD) { minD = d; found = n; }
+      });
+      return found;
+    }
+
+    function onMouseMove(e) {
+      const rect = wrap.getBoundingClientRect();
+      mouse.x = e.clientX - rect.left;
+      mouse.y = e.clientY - rect.top;
+      if (!mouse.active) alpha = Math.max(alpha, alphaMouse);
+      mouse.active = true;
+
+      if (dragId !== null) {
+        const dn = nodes[nodeIdx[dragId]];
+        if (dn) { dn.x = mouse.x + dragOffX; dn.y = mouse.y + dragOffY; dn.vx = 0; dn.vy = 0; }
+        alpha = Math.max(alpha, 0.08);
+        didDrag = true;
+        wrap.style.cursor = "grabbing";
+        return;
+      }
+      if (entryProgress < 1) { hoveredId = null; return; }
+      let found = findDrawNode(mouse.x, mouse.y, 50)?.id || null;
+      if (!found && hoveredId) {
+        const hn = nodes[nodeIdx[hoveredId]];
+        if (hn) {
+          const hx = W / 2 + (hn.x - W / 2) * nodeRevealEase(hn);
+          const hy = H / 2 + (hn.y - H / 2) * nodeRevealEase(hn);
+          if (Math.hypot(hx - mouse.x, hy - mouse.y) < 110) found = hoveredId;
+        }
+      }
+      hoveredId = found;
+      wrap.style.cursor = found ? "grab" : "crosshair";
+    }
+
+    function onMouseLeave() {
+      mouse.active = false;
+      hoveredId = null;
+      dragId = null;
+      wrap.style.cursor = "crosshair";
+    }
+
+    function onMouseDown(e) {
+      if (entryProgress < 1) return;
+      const rect = wrap.getBoundingClientRect();
+      const closest = findDrawNode(e.clientX - rect.left, e.clientY - rect.top, 14);
+      if (closest) {
+        dragId = closest.id;
+        dragOffX = closest.x - (e.clientX - rect.left);
+        dragOffY = closest.y - (e.clientY - rect.top);
+        didDrag = false;
+        e.preventDefault();
+      }
+    }
+
+    function onMouseUp() { dragId = null; }
+
+    function onClick(e) {
+      if (didDrag) { didDrag = false; return; }
+      const rect = wrap.getBoundingClientRect();
+      let clicked = hoveredId;
+      if (!clicked) clicked = findDrawNode(e.clientX - rect.left, e.clientY - rect.top, 50)?.id || null;
+      if (clicked) ripples.push({ id: clicked, t: 0 });
+      selectedId = clicked === selectedId ? null : clicked;
+    }
+
+    function onVisibilityChange() {
+      if (document.hidden) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      } else if (!rafId) {
+        rafId = requestAnimationFrame(loop);
+      }
+    }
+
+    function onResize() {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resize();
+        rafId = requestAnimationFrame(loop);
+      }, 120);
+    }
+
+    function onGraphSearch(event) {
+      const q = String(event.detail || "").trim().toLowerCase();
+      if (!q) {
+        searchIds = new Set();
+        return;
+      }
+      searchIds = new Set(graphNodes.filter(s => s.id.toLowerCase().includes(q)).map(s => s.id));
+      if (searchIds.size > 0) alpha = Math.max(alpha, 0.1);
+    }
+
+    wrap.addEventListener("mousemove", onMouseMove);
+    wrap.addEventListener("mouseleave", onMouseLeave);
+    wrap.addEventListener("mousedown", onMouseDown);
+    wrap.addEventListener("mouseup", onMouseUp);
+    wrap.addEventListener("click", onClick);
+    document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("knowledge-graph-search", onGraphSearch);
+
+    resize();
+    if (prefersReduced) {
+      entryTriggered = true;
+      entryProgress = 1;
+    } else {
+      observer = new IntersectionObserver(entries => {
+        if (entries[0].isIntersecting && !entryTriggered) {
+          entryTriggered = true;
+          entryProgress = 0;
+          observer.disconnect();
+        }
+      }, { threshold: 0.15 });
+      observer.observe(wrap);
+    }
+    rafId = requestAnimationFrame(loop);
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      if (observer) observer.disconnect();
+      clearTimeout(resizeTimer);
+      wrap.removeEventListener("mousemove", onMouseMove);
+      wrap.removeEventListener("mouseleave", onMouseLeave);
+      wrap.removeEventListener("mousedown", onMouseDown);
+      wrap.removeEventListener("mouseup", onMouseUp);
+      wrap.removeEventListener("click", onClick);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("knowledge-graph-search", onGraphSearch);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Search is read by the canvas loop without forcing React re-renders per frame.
+  }, [search]);
+
+  return (
+    <div className="graph-section-inner">
+      <div className="graph-header-row">
+        <div />
+        <div className="graph-right-controls">
+          <input
+            className="graph-search-input"
+            type="text"
+            placeholder="Search Tools"
+            value={search}
+            onChange={e => {
+              const value = e.target.value;
+              setSearch(value);
+              const q = value.trim().toLowerCase();
+              searchRef.current = value;
+              window.dispatchEvent(new CustomEvent("knowledge-graph-search", { detail: q }));
+            }}
+            onKeyDown={e => {
+              if (e.key === "Escape") {
+                setSearch("");
+                window.dispatchEvent(new CustomEvent("knowledge-graph-search", { detail: "" }));
+              }
+            }}
+            aria-label="Search tools"
+          />
+        </div>
+      </div>
+      <div className="graph-canvas-wrap" ref={wrapRef}>
+        <canvas ref={canvasRef} className="knowledge-graph-canvas" />
+      </div>
+    </div>
+  );
+}
+
+function HomePage({ navigateTo }) {
+  const totalEntries = Object.values(entriesByCategory).reduce((n, a) => n + a.length, 0);
+  const activeCategories = Object.keys(entriesByCategory).filter(k => CATEGORY_META[k] && entriesByCategory[k].length > 0).length;
+  const focusRef = useRef(null);
+  const [scrolled, setScrolled] = useState(false);
+
+  function scrollToFocus() {
+    focusRef.current?.scrollIntoView({ behavior: "smooth" });
+  }
+
+  useEffect(() => {
+    function onScroll() { setScrolled(window.scrollY > 40); }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <div className="home">
+
+      <div className="hero-snap">
+        <section className="hero">
+          <div className="hero-left">
+            <div className="hero-eyebrow">
+              <span className="hero-kicker">SOC Analyst · Cybersecurity Portfolio</span>
+              {totalEntries > 0 && (
+                <span className="hero-entry-count">{totalEntries} {totalEntries === 1 ? "entry" : "entries"} · {activeCategories} focus {activeCategories === 1 ? "area" : "areas"}</span>
+              )}
+            </div>
+            <h1 className="hero-headline">
+              Security investigations,<br />threat analysis, and<br />
+              <span className="hero-accent">detection research.</span>
+            </h1>
+            <p className="hero-desc">
+              Documented case studies from hands-on lab work across endpoint forensics,
+              SIEM detection, network analysis, and incident response.
+            </p>
+            <div className="hero-ctas">
+              <button className="cta-primary" onClick={scrollToFocus} type="button">
+                Browse Work →
+              </button>
+            </div>
+          </div>
+          <div className="hero-right">
+            <SkillRadar navigateTo={navigateTo} />
+          </div>
+        </section>
+        <button className={`scroll-hint${scrolled ? " hidden" : ""}`} onClick={scrollToFocus} type="button" aria-label="Scroll to areas of practice">
+          <span />
+        </button>
+      </div>
+
+      <div className="focus-snap" ref={focusRef}>
+        <span className="section-label">Areas of Practice</span>
+        <div className="focus-grid">
+          {sortedCategorySlugs.map((slug, i) => {
+            const meta = CATEGORY_META[slug];
+            const count = (entriesByCategory[slug] || []).length;
+            return (
+              <button key={slug} className="focus-card" onClick={() => navigateTo(`/${slug}`)} type="button"
+                style={{ animationDelay: `${i * 65}ms` }}>
+                <div className="focus-card-top">
+                  <span className="focus-title">{meta.label}</span>
+                  {count > 0 && <span className="focus-count">{count}</span>}
+                </div>
+                <span className="focus-desc">{meta.desc}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <section className="graph-section">
+        <KnowledgeGraphReference />
+      </section>
+
+    </div>
+  );
+}
+
+function CategoryIcon({ slug }) {
+  const icons = {
+    "homelab": <><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></>,
+    "endpoint": <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>,
+    "network-security": <><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20"/></>,
+    "siem": <><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></>,
+    "vulnerability-management": <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></>,
+    "threat-intelligence": <><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>,
+    "incident-response": <><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></>,
+    "identity-account": <><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+  };
+  const paths = icons[slug];
+  if (!paths) return null;
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      {paths}
+    </svg>
+  );
+}
+
+
+// ── Category page ─────────────────────────────────────────
+
+function CategoryPage({ categorySlug, entries, openEntry, openingEntry }) {
+  const meta = CATEGORY_META[categorySlug] || { label: categorySlug, color: "var(--accent)", bg: "var(--accent-light)" };
+  return (
+    <div className="page-container">
+      <div className="page-header">
+        <h1 style={{ color: "var(--accent)" }}>{meta.label}</h1>
+        <span className="page-count">{entries.length} {entries.length === 1 ? "case" : "cases"}</span>
+      </div>
+      <div className="cases-list" aria-live="polite">
+        {entries.length === 0 ? (
+          <div className="empty-row">No cases in this category yet.</div>
+        ) : (
+          entries.map((entry, i) => (
+            <CaseRow key={entry.slug} entry={entry} isOpening={openingEntry === entry.slug} onOpen={openEntry} animDelay={i * 60} />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CaseRow({ entry, isOpening, onOpen, animDelay = 0 }) {
+  const meta = CATEGORY_META[entry.categorySlug] || { color: "var(--accent)", bg: "var(--accent-light)" };
+  const [expanded, setExpanded] = useState(false);
+
+  function handleClick(e) {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
     onOpen(entry);
+  }
+
+  function handleToggle(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpanded(v => !v);
   }
 
   return (
     <a
-      aria-label={`Open ${entry.title}`}
-      className={`entry-row clickable-entry ${isOpening ? "is-opening" : ""}`}
+      className={`case-row${isOpening ? " is-opening" : ""}`}
       href={browserPath(entry.link)}
       onClick={handleClick}
+      aria-label={`Open ${entry.title}`}
+      style={{ animationDelay: `${animDelay}ms` }}
     >
-      <div className="entry-content-column">
-        <h3>{entry.title}</h3>
-        <p>{entry.summary}</p>
-      </div>
-        <div className="row-meta">
-          {entry.skills.map((skill) => (
-            <span className="mini-label" key={skill}>
-              {skill}
-            </span>
-          ))}
+      <div className="case-row-top">
+        <div className="case-row-left">
+          <div className="case-row-header">
+            {entry.type && <span className="type-label" style={{ background: meta.color }}>{entry.type}</span>}
+            {entry.date && <span className="date">{entry.date}</span>}
+          </div>
+          <h3>{entry.title}</h3>
         </div>
-    </a>
-  );
-}
-
-function EntryPage({ entry, entryView }) {
-  return (
-    <article className="entry-page">
-      {entryView === "skim" && <SkimEntry entry={entry} />}
-      {entryView === "detailed" && <DetailedEntry entry={entry} />}
-      {entryView === "story" && <StoryEntry entry={entry} />}
-      {entryView === "gallery" && entry.images && <GalleryEntry entry={entry} />}
-    </article>
-  );
-}
-
-function SkimEntry({ entry }) {
-  return (
-    <>
-      <header className="entry-page-header">
-        <span>SKIM VIEW</span>
-        <h1>{entry.projectTitle}</h1>
-        <p>{entry.summary}</p>
-      </header>
-
-      <div className="skim-grid">
-        <SkimSection title="Goal">
-          <p>{entry.goal}</p>
-        </SkimSection>
-
-        <SkimSection title="Environment">
-          <p>{entry.environment}</p>
-        </SkimSection>
-
-        <SkimSection title="Attack Phases Covered">
-          <div className="phase-chain">
-            {entry.phases.map((phase) => (
-              <span key={phase}>{phase}</span>
-            ))}
-          </div>
-        </SkimSection>
-
-        <SkimSection title="Key Findings">
-          <ul className="finding-list">
-            {entry.keyFindings.map((finding) => (
-              <li key={finding}>{finding}</li>
-            ))}
-          </ul>
-        </SkimSection>
-
-        <SkimSection title="Outcome">
-          <p>{entry.outcome}</p>
-        </SkimSection>
-
-        <SkimSection title="Skills Demonstrated">
-          <div className="row-meta">
-            {entry.demonstratedSkills.map((skill) => (
-              <span className="mini-label" key={skill}>
-                {skill}
-              </span>
-            ))}
-          </div>
-        </SkimSection>
-
-        <SkimSection title="Tools Used">
-          <div className="row-meta">
-            {entry.tools.map((tool) => (
-              <span className="mini-label tool-label" key={tool}>
-                {tool}
-              </span>
-            ))}
-          </div>
-        </SkimSection>
-      </div>
-    </>
-  );
-}
-
-function SkimSection({ children, title }) {
-  return (
-    <section className="skim-section">
-      <h2>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function DetailedEntry({ entry }) {
-  const details = entry.details;
-
-  if (details.sections) {
-    return <GenericDetailedEntry entry={entry} />;
-  }
-
-  return (
-    <div className="detailed-entry">
-      <header className="entry-page-header">
-        <span>DETAILED VIEW</span>
-        <h1>{entry.title}</h1>
-      </header>
-
-      <DetailBlock title="Objective">
-        <p>{details.objective}</p>
-      </DetailBlock>
-
-      <DetailBlock title="Lab Environment">
-        <DataTable headers={["Component", "Detail"]} rows={details.labEnvironment} monoSecond />
-      </DetailBlock>
-
-      <DetailBlock title="Phase 1 - Delivery">
-        {details.delivery.map((paragraph) => (
-          <p key={paragraph}>{paragraph}</p>
-        ))}
-        <h3>Email Authentication Results</h3>
-        <DataTable headers={["Check", "Result"]} rows={details.emailAuth} />
-      </DetailBlock>
-
-      <DetailBlock title="Phase 2 - Execution">
-        <p>{details.execution}</p>
-      </DetailBlock>
-
-      <DetailBlock title="Phase 3 - Reconnaissance">
-        <p>{details.reconIntro}</p>
-        <DataTable headers={["Command", "Purpose"]} rows={details.reconCommands} monoFirst />
-        <p>{details.reconConclusion}</p>
-      </DetailBlock>
-
-      <DetailBlock title="Phase 4 - Persistence">
-        <p>{details.persistence}</p>
-        <DataTable headers={["Field", "Value"]} rows={details.persistenceRows} monoSecond />
-      </DetailBlock>
-
-      <DetailBlock title="Phase 5 - Command and Control (C2)">
-        <p>{details.c2}</p>
-      </DetailBlock>
-
-      <DetailBlock title="Phase 6 - Exfiltration">
-        <p>{details.exfiltration}</p>
-      </DetailBlock>
-
-      <DetailBlock title="Detection - Splunk Analysis">
-        <p>{details.detectionIntro}</p>
-        <p>
-          <strong>Detection approach:</strong> {details.detectionApproach}
-        </p>
-        <h3>Primary detection query</h3>
-        <pre>{details.splunkQuery}</pre>
-        <h3>Complete attack chain recovered in Splunk</h3>
-        <DataTable
-          headers={["Time", "New Process", "Parent Process", "Phase"]}
-          rows={details.attackChain}
-          monoColumns={[0, 1, 2]}
-        />
-      </DetailBlock>
-
-      <DetailBlock title="Payload Analysis">
-        <DataTable headers={["Field", "Value"]} rows={details.payloadAnalysis} monoSecond />
-        <p>{details.payloadConclusion}</p>
-      </DetailBlock>
-
-      <DetailBlock title="Indicators of Compromise (IOCs)">
-        <DataTable headers={["Type", "Value"]} rows={details.iocs} monoSecond />
-      </DetailBlock>
-
-      <DetailBlock title="NIST Mapping">
-        <DataTable headers={["NIST SP 800-61 Phase", "Actions Taken"]} rows={details.nistMapping} />
-      </DetailBlock>
-
-      <DetailBlock title="Key Takeaways">
-        <ul className="finding-list">
-          {details.takeaways.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </DetailBlock>
-
-      <DetailBlock title="What I Would Do Next">
-        <ul className="finding-list">
-          {details.next.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      </DetailBlock>
-    </div>
-  );
-}
-
-function GenericDetailedEntry({ entry }) {
-  return (
-    <div className="detailed-entry">
-      <header className="entry-page-header">
-        <span>DETAILED VIEW</span>
-        <h1>{entry.title}</h1>
-      </header>
-
-      {entry.details.sections.map((section) => (
-        <DetailBlock title={section.title} key={section.title}>
-          <ReportSection section={section} />
-        </DetailBlock>
-      ))}
-    </div>
-  );
-}
-
-function ReportSection({ section }) {
-  return (
-    <>
-      {section.paragraphs?.map((paragraph) => (
-        <p key={paragraph}>{paragraph}</p>
-      ))}
-
-      {section.table && (
-        <DataTable
-          headers={section.table.headers}
-          monoColumns={section.table.monoColumns || []}
-          rows={section.table.rows}
-        />
-      )}
-
-      {section.codeTitle && <h3>{section.codeTitle}</h3>}
-      {section.code && <pre>{section.code}</pre>}
-
-      {section.list && (
-        <ul className="finding-list">
-          {section.list.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      )}
-
-      {section.subsections?.map((subsection) => (
-        <div className="report-subsection" key={subsection.title}>
-          <h3>{subsection.title}</h3>
-          <ReportSection section={subsection} />
-        </div>
-      ))}
-    </>
-  );
-}
-
-function DetailBlock({ children, title }) {
-  return (
-    <section className="detail-block">
-      <h2>{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function DataTable({ headers, monoColumns = [], monoFirst = false, monoSecond = false, rows }) {
-  return (
-    <div className="data-table-wrap">
-      <table className="data-table">
-        <thead>
-          <tr>
-            {headers.map((header) => (
-              <th key={header}>{header}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.join("|")}>
-              {row.map((cell, index) => {
-                const isMono =
-                  monoColumns.includes(index) ||
-                  (monoFirst && index === 0) ||
-                  (monoSecond && index === 1);
-
-                return (
-                  <td className={isMono ? "mono-value" : ""} key={`${cell}-${index}`}>
-                    {cell}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function StoryEntry({ entry }) {
-  return (
-    <div className="story-entry">
-      <header className="entry-page-header">
-        <span>STORY VIEW</span>
-        <h1>{entry.projectTitle}</h1>
-        <p>How it actually went</p>
-      </header>
-
-      <div className="story-body">
-        {entry.story.map((section) => (
-          <section className="story-section" key={section.title}>
-            <h2>{section.title}</h2>
-            {section.paragraphs?.map((paragraph) => (
-              <p key={paragraph}>{paragraph}</p>
-            ))}
-            {section.list && (
-              <ul className="finding-list">
-                {section.list.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            )}
-          </section>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function GalleryEntry({ entry }) {
-  const [lightboxIndex, setLightboxIndex] = React.useState(null);
-
-  React.useEffect(() => {
-    if (lightboxIndex === null) return;
-    function onKey(e) {
-      if (e.key === "Escape") setLightboxIndex(null);
-      if (e.key === "ArrowRight") setLightboxIndex((i) => Math.min(i + 1, entry.images.length - 1));
-      if (e.key === "ArrowLeft") setLightboxIndex((i) => Math.max(i - 1, 0));
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [lightboxIndex, entry.images.length]);
-
-  return (
-    <div className="gallery-entry">
-      <header className="entry-page-header">
-        <span>GALLERY</span>
-        <h1>{entry.projectTitle}</h1>
-        <p>Evidence and screenshots from the lab</p>
-      </header>
-
-      <div className="gallery-grid">
-        {entry.images.map((image, index) => (
           <button
-            className="gallery-card"
-            key={image.src}
-            onClick={() => setLightboxIndex(index)}
-            type="button"
+            className={`case-row-toggle${expanded ? " open" : ""}`}
+            onClick={handleToggle}
+            aria-label={expanded ? "Collapse" : "Show skills and tools"}
           >
-            <img src={image.src} alt={image.caption} />
-            <p className="gallery-caption">{image.caption}</p>
+            <svg viewBox="0 0 10 6" width="10" height="6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 1l4 4 4-4"/>
+            </svg>
           </button>
-        ))}
       </div>
-
-      {lightboxIndex !== null && (
-        <div
-          className="lightbox-overlay"
-          onClick={() => setLightboxIndex(null)}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="lightbox-inner">
-            <img
-              src={entry.images[lightboxIndex].src}
-              alt={entry.images[lightboxIndex].caption}
-              onClick={(e) => e.stopPropagation()}
-            />
-            <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
-              <p className="lightbox-caption">{entry.images[lightboxIndex].caption}</p>
-              <div className="lightbox-controls">
-                <button
-                  disabled={lightboxIndex === 0}
-                  onClick={(e) => { e.stopPropagation(); setLightboxIndex((i) => i - 1); }}
-                  type="button"
-                >
-                  ←
-                </button>
-                <span className="lightbox-counter">
-                  {lightboxIndex + 1} / {entry.images.length}
-                </span>
-                <button
-                  disabled={lightboxIndex === entry.images.length - 1}
-                  onClick={(e) => { e.stopPropagation(); setLightboxIndex((i) => i + 1); }}
-                  type="button"
-                >
-                  →
-                </button>
-                <button onClick={() => setLightboxIndex(null)} type="button">
-                  ✕
-                </button>
-              </div>
+      {expanded && (
+        <div className="case-row-chips">
+          <div className="case-row-chip-group">
+            <span className="case-row-chip-label">Skills</span>
+            <div className="case-row-chip-list">
+              {entry.skills.length > 0
+                ? entry.skills.map(s => <span className="mini-label" key={s} style={{ color: meta.color, borderColor: `${meta.color}30`, background: meta.bg }}>{s}</span>)
+                : <span className="meta-field-empty">—</span>}
+            </div>
+          </div>
+          <div className="case-row-chip-group">
+            <span className="case-row-chip-label">Tools</span>
+            <div className="case-row-chip-list">
+              {entry.tools.length > 0
+                ? entry.tools.map(t => <span className="mini-label tool-chip" key={t}>{t}</span>)
+                : <span className="meta-field-empty">—</span>}
             </div>
           </div>
         </div>
       )}
+    </a>
+  );
+}
+
+// ── Code block with copy button ──────────────────────────
+
+function CodeBlock({ children }) {
+  const [copied, setCopied] = useState(false);
+  const preRef = useRef(null);
+
+  function handleCopy() {
+    const text = preRef.current?.innerText || "";
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  }
+
+  return (
+    <div className="code-block-wrap">
+      <pre ref={preRef}>{children}</pre>
+      <button className={`copy-btn${copied ? " copied" : ""}`} onClick={handleCopy} type="button">
+        {copied ? "✓ Copied" : "Copy"}
+      </button>
     </div>
+  );
+}
+
+// ── Code/query block ──────────────────────────────────────
+
+function detectCodeLang(text) {
+  if (!text || text.length < 2) return null;
+  // XML / config markup
+  if (/^<[!?\/]?\w/.test(text) || /^<!--/.test(text))
+    return "xml";
+  // KQL / SIEM (needs length to avoid false positives)
+  if (text.length >= 5 && /[\w\.]+\s*:\s*["*\w\[\(\\]/.test(text) && /(AND|OR|NOT|\*|\|{2}|&&)/.test(text))
+    return "kql";
+  // PowerShell cmdlets
+  if (/^(Get|Set|New|Remove|Invoke|Start|Stop|Write|Read|Import|Export|Add|Clear|Copy|Move|Rename|Test|Update|Find|Select|Where|ForEach|Sort|Convert|Format|Out|Register|Enable|Disable|Connect)-\w+/.test(text))
+    return "powershell";
+  // PowerShell variables, loops, control flow
+  if (/^\$\w+/.test(text))
+    return "powershell";
+  if (/^(foreach|if|elseif|else|while|do|switch|try|catch|finally|function|param|return)\s*[\(\{$]/.test(text))
+    return "powershell";
+  // Python
+  if (/^(import |from \w+ import|def |class |print\(|if __name__|for \w+ in |while |try:|except|with )/.test(text))
+    return "python";
+  // YAML config
+  if (text.length >= 3 && (
+    /^\w[\w\._-]*:\s*$/.test(text) ||
+    /^\w[\w\._-]*:\s*(["'\[\{]|true|false|none|\d)/.test(text) ||
+    /^-\s+\w[\w\._-]*:\s*(["'\[\{]|\w)/.test(text)))
+    return "yaml";
+  // Bash / shell
+  if (/^(sudo |apt |yum |pip |pip3 |npm |git |curl |wget |chmod |chown |mkdir |grep |awk |sed |cat |echo |sh |bash |python3? |docker[ -]|docker-compose |kubectl |wsl |cp |mv |rm |tar |ssh |scp )/.test(text))
+    return "bash";
+  // Short unambiguous shell commands
+  if (/^(ls|pwd|wsl|man)(\s.*)?$/.test(text))
+    return "bash";
+  // Windows CMD / msiexec / NET / reg etc.
+  if (/^(msiexec|NET |net |REG |reg add|reg delete|sc |icacls|netsh|wmic|runas)\s/i.test(text))
+    return "cmd";
+  if ((/^[A-Za-z]:\\/.test(text) || /^\.[\\\/]/.test(text)) && /\.(exe|bat|ps1|cmd|msi)\b/.test(text))
+    return "cmd";
+  // Generic: function call or assignment
+  if (text.length >= 5 && (/^\w[\w\.]+\(.*\)$/.test(text) || /^\w+ ?= ?("|'|\[|\{|\()/.test(text)))
+    return "code";
+  return null;
+}
+
+function QueryBlock({ text, lang = "kql" }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    });
+  }
+  return (
+    <div className="query-block">
+      <div className="query-block-header">
+        <span className="query-lang">{lang}</span>
+        <button className="query-copy-btn" onClick={copy} type="button">
+          {copied ? "✓ Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="query-body"><code className="query-text">{text}</code></pre>
+    </div>
+  );
+}
+
+// Lines that look like code continuations (inside an already-started block)
+function looksLikeCodeContinuation(text) {
+  if (!text) return false;
+  if (/^[{}]$/.test(text.trim())) return true;          // bare brace on its own line
+  if (/^}\s*\|/.test(text)) return true;                // } | Cmdlet pipe
+  if (/\$[A-Za-z_]\w*/.test(text)) return true;         // contains $variable (not currency)
+  if (/^<[!?\/]?\w/.test(text) || /^<!--/.test(text)) return true; // XML element
+  return false;
+}
+
+// Rehype plugin: merge consecutive code-like <p> into a single <pre> block
+function rehypeMergeCodeBlocks() {
+  function getText(node) {
+    if (!node) return "";
+    if (node.type === "text") return node.value || "";
+    return (node.children || []).map(getText).join("");
+  }
+  function walk(node) {
+    if (!node.children) return;
+    const out = [];
+    let i = 0;
+    while (i < node.children.length) {
+      const child = node.children[i];
+      if (child.type === "element" && child.tagName === "p") {
+        const text = getText(child).trim();
+        const lang = detectCodeLang(text);
+        if (lang) {
+          const lines = [text];
+          i++;
+          while (i < node.children.length) {
+            const next = node.children[i];
+            if (next.type === "text" && !next.value.trim()) { i++; continue; }
+            if (next.type === "element" && next.tagName === "p") {
+              const nt = getText(next).trim();
+              if (!nt) { i++; continue; } // skip blank paragraphs inside a code block
+              if (detectCodeLang(nt) || looksLikeCodeContinuation(nt)) {
+                lines.push(nt); i++; continue;
+              }
+            }
+            break;
+          }
+          out.push({
+            type: "element", tagName: "pre",
+            properties: { dataLang: lang },
+            children: [{ type: "element", tagName: "code", properties: {},
+              children: [{ type: "text", value: lines.join("\n") }]
+            }],
+          });
+          continue;
+        }
+      }
+      walk(child);
+      out.push(child);
+      i++;
+    }
+    node.children = out;
+  }
+  return walk;
+}
+
+// ── Entry page ────────────────────────────────────────────
+
+function EntryPage({ entry, navigateTo }) {
+  const meta = CATEGORY_META[entry.categorySlug] || { label: entry.categorySlug, color: "var(--accent)" };
+  const [scrollPct, setScrollPct] = useState(0);
+
+  useEffect(() => {
+    function onScroll() {
+      const el = document.documentElement;
+      const scrolled = el.scrollTop;
+      const total = el.scrollHeight - el.clientHeight;
+      setScrollPct(total > 0 ? (scrolled / total) * 100 : 0);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  return (
+    <>
+      <div className="progress-bar" style={{ width: `${scrollPct}%`, background: meta.color }} />
+      <div className="entry-container">
+        <button className="back-btn" onClick={() => navigateTo(`/${entry.categorySlug}`)} type="button"
+          style={{ color: meta.color }}>
+          ← {meta.label}
+        </button>
+        <div className="report-card">
+        <article className="markdown-entry">
+          <h1 className="entry-doc-title">{entry.displayTitle || entry.title}</h1>
+          <div className="case-meta-strip">
+            {entry.date && <span className="date">{entry.date}</span>}
+            <span className="meta-field">
+              <span className="meta-field-label">Skills:</span>
+              {entry.skills.length > 0
+                ? entry.skills.map(s => <span className="mini-label" key={s} style={{ color: meta.color, borderColor: `${meta.color}30`, background: meta.bg }}>{s}</span>)
+                : <span className="meta-field-empty">—</span>}
+            </span>
+            <span className="meta-field">
+              <span className="meta-field-label">Tools:</span>
+              {entry.tools.length > 0
+                ? entry.tools.map(t => <span className="mini-label tool-chip" key={t}>{t}</span>)
+                : <span className="meta-field-empty">—</span>}
+            </span>
+          </div>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeRaw]}
+            components={{
+              p: ({ node, children }) => {
+                function getText(n) {
+                  if (!n) return "";
+                  if (n.type === "text") return n.value || "";
+                  return (n.children || []).map(getText).join("");
+                }
+                const text = getText(node).trim();
+                // Section heading: only meaningful child is a <strong> (no trailing text)
+                const meaningful = (node.children || []).filter(
+                  c => c.type !== "text" || c.value?.trim() !== ""
+                );
+                const isSectionHeading = meaningful.length === 1 &&
+                  meaningful[0].tagName === "strong";
+                if (isSectionHeading) return <p className="entry-heading">{children}</p>;
+                if (text === "↓") return <p className="flow-arrow">{children}</p>;
+                return <p>{children}</p>;
+              },
+              table: ({ node, ...props }) => (
+                <div className="data-table-wrap"><table className="data-table" {...props} /></div>
+              ),
+              pre: ({ node, children }) => {
+                const lang = node?.properties?.dataLang;
+                if (lang) {
+                  function getT(n) {
+                    if (!n) return "";
+                    if (n.type === "text") return n.value || "";
+                    return (n.children || []).map(getT).join("");
+                  }
+                  return <QueryBlock text={getT(node).trim()} lang={lang} />;
+                }
+                return <CodeBlock>{children}</CodeBlock>;
+              },
+              img: ({ node, src, alt, ...props }) => {
+                const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+                const resolved = src && !src.startsWith("http") && !src.startsWith("/")
+                  ? `${base}/media/${src.replace(/^media\//, "")}`
+                  : src;
+                return (
+                  <figure className="md-figure">
+                    <img src={resolved} alt={alt} {...props} />
+                    {alt && <figcaption>{alt}</figcaption>}
+                  </figure>
+                );
+              },
+            }}
+          >
+            {entry.content}
+          </ReactMarkdown>
+        </article>
+        </div>
+      </div>
+    </>
   );
 }
 

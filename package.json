@@ -7,9 +7,14 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "react-markdown": "^10.1.0",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.1",
+    "vite": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "mammoth": "^1.12.0"
+  }
 }
