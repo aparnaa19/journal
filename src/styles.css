@@ -475,6 +475,15 @@ button.social-link {
   border-left: 1px solid var(--border);
 }
 
+.hero-name {
+  font-size: clamp(22px, 2.4vw, 32px);
+  font-weight: 600;
+  color: var(--text);
+  margin: 10px 0 4px;
+  letter-spacing: -0.01em;
+  animation: fade-up 500ms ease-out 120ms both;
+}
+
 .hero-headline {
   font-family: var(--font-display);
   font-size: clamp(36px, 4vw, 58px);
