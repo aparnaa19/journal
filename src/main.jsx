@@ -1831,7 +1831,7 @@ function HomePage({ navigateTo }) {
         <section className="hero">
           <div className="hero-left">
             <div className="hero-eyebrow">
-              <span className="hero-kicker">SOC Analyst · Cybersecurity Portfolio</span>
+              <span className="hero-kicker">Aparnaa · SOC Analyst · Cybersecurity Portfolio</span>
               {totalEntries > 0 && (
                 <span className="hero-entry-count">{totalEntries} {totalEntries === 1 ? "entry" : "entries"} · {activeCategories} focus {activeCategories === 1 ? "area" : "areas"}</span>
               )}
