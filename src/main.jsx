@@ -1836,7 +1836,7 @@ function HomePage({ navigateTo }) {
                 <span className="hero-entry-count">{totalEntries} {totalEntries === 1 ? "entry" : "entries"} · {activeCategories} focus {activeCategories === 1 ? "area" : "areas"}</span>
               )}
             </div>
-            <p className="hero-name">Aparnaa</p>
+            <p className="hero-name">Aparnaa's</p>
             <h1 className="hero-headline">
               Security investigations,<br />threat analysis, and<br />
               <span className="hero-accent">detection research.</span>
