@@ -4,6 +4,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import "./styles.css";
+import { startVisitorLog } from "./visitorLog.js";
+
+startVisitorLog();
 
 const allFiles = import.meta.glob("../content/**/*.md", { query: "?raw", import: "default", eager: true });
 
@@ -14,7 +17,7 @@ const CATEGORY_META = {
   "siem":                      { label: "SIEM",                               navLabel: "SIEM",                     prefix: "SI",  navOrder: 4, color: "var(--accent)", bg: "var(--accent-light)", desc: "Cloud misconfiguration analysis, IAM policy review, and cloud-native threat detection." },
   "vulnerability-management":  { label: "Vulnerability Management",           navLabel: "Vulnerability Management", prefix: "VM",  navOrder: 5, color: "var(--accent)", bg: "var(--accent-light)", desc: "Memory forensics, disk imaging, timeline analysis, and end-to-end incident response." },
   "threat-intelligence":       { label: "Threat Intelligence",                navLabel: "Threat Intelligence",      prefix: "TI",  navOrder: 6, color: "var(--accent)", bg: "var(--accent-light)", desc: "CVE analysis, adversary profiling, MITRE ATT&CK mapping, and vulnerability research." },
-  "incident-response":         { label: "Incident Response",                  navLabel: "Incident Response",        prefix: "IR",  navOrder: 7, color: "var(--accent)", bg: "var(--accent-light)", desc: "Building SIEM detection rules, tuning alerts, and reducing false positives in real environments." },
+  "sigma-rules":               { label: "Sigma Rules",                        navLabel: "Sigma Rules",              prefix: "SR",  navOrder: 7, color: "var(--accent)", bg: "var(--accent-light)", desc: "Building SIEM detection rules, tuning alerts, and reducing false positives in real environments." },
   "identity-account":          { label: "Identity & Access Management",       navLabel: "Identity & Access",        prefix: "IA",  navOrder: 8, color: "var(--accent)", bg: "var(--accent-light)", desc: "Identity threats, privilege escalation, account persistence, and access control analysis." },
 };
 
@@ -100,6 +103,93 @@ for (const [cat, files] of Object.entries(entriesByCategory)) {
   entriesByCategory[cat] = files.map(({ path, content }, i) =>
     parseEntry(content, path, `${meta.prefix}-${String(i + 1).padStart(3, "0")}`)
   );
+}
+
+// ── Sigma rules: raw .yml/.yaml files, any folder depth under content/sigma-rules/ ──
+
+const sigmaFiles = import.meta.glob("../content/sigma-rules/**/*.{yml,yaml}", { query: "?raw", import: "default", eager: true });
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function unquote(s) {
+  return s.trim().replace(/^(['"])([\s\S]*)\1$/, "$2");
+}
+
+// Minimal reader for the top-level Sigma fields we display (no YAML dependency).
+function readSigmaFields(yaml) {
+  const lines = yaml.replace(/\r/g, "").split("\n");
+  const fields = {};
+  let tags = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^([A-Za-z_]+):\s*(.*)$/);
+    if (!m) continue;
+    const [, key, rest] = m;
+    if (key === "tags") {
+      if (rest.trim().startsWith("[")) {
+        tags = rest.replace(/[\[\]]/g, "").split(",").map(unquote).filter(Boolean);
+      } else {
+        while (i + 1 < lines.length && /^\s+-\s+/.test(lines[i + 1])) tags.push(unquote(lines[++i].replace(/^\s+-\s+/, "")));
+      }
+    } else if (/^[|>][-+]?$/.test(rest.trim())) {
+      // block scalar (description: | or >)
+      const block = [];
+      while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1]) || lines[i + 1].trim() === "")) block.push(lines[++i].trim());
+      fields[key] = block.join(" ").trim();
+    } else if (rest.trim()) {
+      fields[key] = unquote(rest);
+    } else if (key === "logsource") {
+      while (i + 1 < lines.length && /^\s+\w+:/.test(lines[i + 1])) {
+        const lm = lines[++i].match(/^\s+(\w+):\s*(.*)$/);
+        fields[`logsource_${lm[1]}`] = unquote(lm[2]);
+      }
+    }
+  }
+  return { fields, tags };
+}
+
+function sigmaTagLabel(tag) {
+  const t = tag.replace(/^attack\./i, "");
+  if (/^t\d{4}(\.\d{3})?$/i.test(t)) return t.toUpperCase();
+  if (/^(cve|car|detection)\./i.test(tag)) return tag;
+  return t.split(/[_\-]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+function parseSigmaEntry(yaml, path, caseNumber) {
+  const fileName = path.split("/").pop();
+  const slug = fileName.replace(/\.ya?ml$/i, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const { fields, tags } = readSigmaFields(yaml);
+
+  const title = fields.title || fileName;
+
+  const content = [
+    fields.description ? `<p>${escapeHtml(fields.description)}</p>` : "",
+    `<p><strong>Rule</strong></p>`,
+    `<pre data-lang="yaml"><code>${escapeHtml(yaml.replace(/\r/g, "").trim())}</code></pre>`,
+  ].join("\n");
+
+  const skills = ["Sigma Rule Writing", "Detection Engineering", ...tags.map(sigmaTagLabel)];
+  const tools = ["Sigma", fields.logsource_product, fields.logsource_service].filter(Boolean)
+    .map(s => s.charAt(0).toUpperCase() + s.slice(1));
+
+  return {
+    title, displayTitle: title,
+    summary: fields.description || "",
+    date: (fields.date || "").replace(/\//g, "-"),
+    type: "SIGMA",
+    skills: [...new Set(skills)], tools: [...new Set(tools)],
+    content, slug, categorySlug: "sigma-rules", caseNumber, readTime: 1,
+    link: `/sigma-rules/${slug}`,
+  };
+}
+
+{
+  const existing = entriesByCategory["sigma-rules"] || [];
+  const rules = Object.entries(sigmaFiles)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, yaml], i) => parseSigmaEntry(yaml, path, `SR-${String(existing.length + i + 1).padStart(3, "0")}`));
+  if (rules.length) entriesByCategory["sigma-rules"] = [...existing, ...rules];
 }
 
 // All defined categories in nav order (even empty ones)
@@ -562,7 +652,7 @@ const CAT_GRAPH_COLORS = {
   "siem":                     "#8E7CFF",
   "vulnerability-management": "#F59E0B",
   "threat-intelligence":      "#E99A15",
-  "incident-response":        "#6BD17B",
+  "sigma-rules":              "#6BD17B",
   "identity-account":         "#E7D6B6",
 };
 
@@ -1884,6 +1974,8 @@ function HomePage({ navigateTo }) {
         <KnowledgeGraphReference />
       </section>
 
+      <p className="visit-log-note">This site keeps an anonymous visit log.</p>
+
     </div>
   );
 }
@@ -1896,7 +1988,7 @@ function CategoryIcon({ slug }) {
     "siem": <><path d="M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z"/></>,
     "vulnerability-management": <><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></>,
     "threat-intelligence": <><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>,
-    "incident-response": <><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></>,
+    "sigma-rules": <><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></>,
     "identity-account": <><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
   };
   const paths = icons[slug];

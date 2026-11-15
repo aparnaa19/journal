@@ -2,7 +2,7 @@
 // Example: node convert.js "C:/Users/me/Downloads/writeup.docx" endpoint
 //
 // Categories: homelab, endpoint, network-security, siem,
-//             vulnerability-management, threat-intelligence, incident-response, identity-account
+//             vulnerability-management, threat-intelligence, sigma-rules, identity-account
 
 const mammoth = require("mammoth");
 const fs = require("fs");
@@ -12,7 +12,7 @@ const [,, docxPath, category] = process.argv;
 
 const CATEGORIES = [
   "homelab", "endpoint", "network-security", "siem",
-  "vulnerability-management", "threat-intelligence", "incident-response", "identity-account"
+  "vulnerability-management", "threat-intelligence", "sigma-rules", "identity-account"
 ];
 
 if (!docxPath || !category) {
@@ -66,6 +66,19 @@ const options = {
   }),
 };
 
+// Splunk SPL: a paragraph starting with index= / sourcetype= / "| ", plus the
+// "| command" paragraphs right after it, become one <pre data-lang="spl"> block.
+function wrapSplQueries(html) {
+  return html.replace(
+    /<p>(?:index\s*=|sourcetype\s*=|\|\s)[^<]*<\/p>(?:\s*<p>\|[^<]*<\/p>)*/g,
+    function (block) {
+      const lines = [];
+      block.replace(/<p>([^<]*)<\/p>/g, function (_, line) { lines.push(line.trim()); });
+      return `<pre data-lang="spl"><code>${lines.join("\n")}</code></pre>`;
+    }
+  );
+}
+
 mammoth.convertToHtml({ path: docxPath }, options).then(function (result) {
   const title = rawName.replace(/[-_]/g, " ");
   let html = result.value;
@@ -92,6 +105,8 @@ mammoth.convertToHtml({ path: docxPath }, options).then(function (result) {
     const attr = lang ? ` data-lang="${lang}"` : "";
     return `<pre${attr}><code>${lines.join("\n")}</code></pre>`;
   });
+
+  html = wrapSplQueries(html);
 
   // Strip LAB / WRITEUP / CVE REPORT type markers
   html = html.replace(/<p><strong>(LAB|WRITEUP|CVE REPORT)<\/strong><\/p>\s*/gi, "");
