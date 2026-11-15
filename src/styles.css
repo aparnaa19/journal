@@ -1760,11 +1760,3 @@ button.social-link {
   .topbar { top: 10px; left: 12px; right: 12px; transform: none; }
   .topbar-pill { max-width: 100%; overflow-x: auto; }
 }
-
-/* Visitor log privacy note (homepage footer) */
-.visit-log-note {
-  margin: 48px 0 24px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--subtle);
-}

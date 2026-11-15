@@ -1974,8 +1974,6 @@ function HomePage({ navigateTo }) {
         <KnowledgeGraphReference />
       </section>
 
-      <p className="visit-log-note">This site keeps an anonymous visit log.</p>
-
     </div>
   );
 }
