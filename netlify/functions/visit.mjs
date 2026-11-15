@@ -11,6 +11,11 @@
 
 const BOT_UA = /bot|crawl|spider|slurp|preview|facebookexternalhit|embedly|quora link|whatsapp|telegram|discord|slack|vkshare|pinterest|bitly|uptime|monitor|pingdom|statuscake|headless|phantom|lighthouse|curl|wget|python-requests|axios|node-fetch|go-http-client|java\//i;
 
+// Hosting / cloud providers. Real visitors browse from ISPs, mobile carriers,
+// companies and universities, not from these. (Google LLC and Microsoft are left
+// out on purpose: their staff browse from those networks too.)
+const DATACENTER = /amazon technologies|amazon data services|amazon\.com services|\baws\b|digitalocean|linode|akamai connected cloud|\bovh|hetzner|vultr|choopa|the constant company|contabo|leaseweb|scaleway|online s\.a\.s|alibaba|aliyun|tencent cloud|m247|datacamp|hostinger|ionos|godaddy|hostroyale|colocrossing|psychz|quadranet|servers\.com|oracle cloud|google cloud/i;
+
 const SOURCES = [
   [/linkedin\.com|lnkd\.in/, "LinkedIn", true],
   [/indeed\./, "Indeed", true],
@@ -126,8 +131,9 @@ export default async (req, context) => {
 
   const geo = context.geo || {};
   const { source, recruiting } = sourceLabel(visit.referrer, visit.utmSource);
-  // Network lookup only on the first beacon of a visit; later updates keep the stored value.
-  const network = visit.seq === 1 ? await networkName(context.ip) : "";
+  const network = await networkName(context.ip);
+  // Cloud / hosting networks = automated scanners and preview bots, not people.
+  if (network && DATACENTER.test(network)) return empty();
 
   const record = {
     ...visit,
