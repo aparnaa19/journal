@@ -234,6 +234,55 @@ function pushPath(p) {
   if (normalizePath(window.location.pathname) !== normalizePath(next)) window.history.pushState({}, "", next);
 }
 
+// ── Scroll reveal ────────────────────────────────────────
+// Fades cards, headings and screenshots up as they scroll into view.
+// Elements are only hidden once JS has tagged them, so nothing is ever
+// stuck invisible if this doesn't run.
+
+const REVEAL_SELECTOR = [
+  ".focus-snap .section-label", ".focus-card", ".graph-section-inner",
+  ".case-row",
+  ".markdown-entry > h2", ".markdown-entry > h3", ".markdown-entry > p.entry-heading",
+  ".markdown-entry .md-figure", ".markdown-entry .data-table-wrap",
+  ".markdown-entry .query-block", ".markdown-entry .code-block-wrap",
+].join(",");
+
+function useScrollReveal(key) {
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+
+    const timers = [];
+    const observer = new IntersectionObserver(entries => {
+      let n = 0;
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const el = e.target;
+        const delay = Math.min(n++, 6) * 70;
+        el.style.setProperty("--reveal-delay", `${delay}ms`);
+        el.classList.add("is-visible");
+        observer.unobserve(el);
+        // Drop the stagger delay afterwards so hover effects stay instant
+        timers.push(setTimeout(() => el.style.removeProperty("--reveal-delay"), delay + 800));
+      }
+    }, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
+
+    const raf = requestAnimationFrame(() => {
+      document.querySelectorAll(REVEAL_SELECTOR).forEach(el => {
+        if (el.classList.contains("reveal")) return;
+        el.classList.add("reveal");
+        observer.observe(el);
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(raf);
+      timers.forEach(clearTimeout);
+      observer.disconnect();
+    };
+  }, [key]);
+}
+
 // ── App ──────────────────────────────────────────────────
 
 function App() {
@@ -246,6 +295,9 @@ function App() {
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
+
+  const routeKey = `${route.view}|${route.categorySlug || ""}|${route.entry?.slug || ""}`;
+  useScrollReveal(routeKey);
 
   function navigateTo(path) {
     pushPath(path);
@@ -265,9 +317,10 @@ function App() {
   }
 
   return (
-    <div className={`app theme-${theme}`}>
+    <div className={`app theme-${theme} view-${route.view}`}>
       <TopBar route={route} navigateTo={navigateTo} theme={theme} setTheme={setTheme} />
       <SocialLinks />
+      <Lightbox />
       <main className="workspace">
         {route.view === "overview" && <HomePage navigateTo={navigateTo} />}
         {route.view === "category" && (
@@ -440,8 +493,8 @@ function TopBar({ route, navigateTo, theme, setTheme }) {
 
 const RS = 380, RCX = 190, RCY = 190, RR = 118, RLEVELS = 5;
 const RING_COLORS = [
-  "rgba(245,228,235,0.48)", "rgba(236,212,224,0.50)",
-  "rgba(225,194,213,0.54)", "rgba(212,174,200,0.57)", "rgba(196,150,185,0.62)",
+  "rgba(124,29,63,0.025)", "rgba(124,29,63,0.04)",
+  "rgba(124,29,63,0.055)", "rgba(124,29,63,0.07)", "rgba(124,29,63,0.09)",
 ];
 
 function rAngle(i, n) { return (2 * Math.PI * i / n) - Math.PI / 2; }
@@ -482,21 +535,30 @@ function rRingPath(f, N) {
 
 function SkillRadar({ navigateTo }) {
   const [hovered, setHovered] = useState(null);
-  const [webProg, setWebProg] = useState(0);
-  const [dataProg, setDataProg] = useState(0);
+  const reduceMotion = typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const [webProg, setWebProg] = useState(reduceMotion ? 1 : 0);
+  const [lineProg, setLineProg] = useState(reduceMotion ? 1 : 0);
+  const [fillProg, setFillProg] = useState(reduceMotion ? 1 : 0);
 
   useEffect(() => {
+    if (reduceMotion) return;
     let start = null, rafId;
+    const ease = t => 1 - Math.pow(1 - t, 3);
+    const clamp = t => Math.min(Math.max(t, 0), 1);
     function step(ts) {
       if (!start) start = ts;
       const elapsed = ts - start;
-      // Web grid draws in over 900ms
-      const tw = Math.min(elapsed / 900, 1);
-      setWebProg(1 - Math.pow(1 - tw, 3));
-      // Data shape fades in after 300ms delay, over 1100ms
-      const td = Math.min(Math.max(elapsed - 300, 0) / 1100, 1);
-      setDataProg(1 - Math.pow(1 - td, 3));
-      if (tw < 1 || td < 1) rafId = requestAnimationFrame(step);
+      // 1. Web grid scales in (0–900ms)
+      const tw = clamp(elapsed / 900);
+      // 2. Outline traces itself around the chart (500–2000ms)
+      const tl = clamp((elapsed - 500) / 1500);
+      // 3. Fill fades in behind the finished outline (1500–2300ms)
+      const tf = clamp((elapsed - 1500) / 800);
+      setWebProg(ease(tw));
+      setLineProg(tl < 1 ? 0.5 - Math.cos(Math.PI * tl) / 2 : 1);
+      setFillProg(ease(tf));
+      if (tw < 1 || tl < 1 || tf < 1) rafId = requestAnimationFrame(step);
     }
     rafId = requestAnimationFrame(step);
     return () => cancelAnimationFrame(rafId);
@@ -516,7 +578,9 @@ function SkillRadar({ navigateTo }) {
   });
 
   const N = axes.length;
-  const fracs = axes.map(a => (a.value / 100) * dataProg);
+  const fracs = axes.map(a => a.value / 100);
+  // Each vertex dot pops in as the tracing line reaches it
+  const dotProg = i => Math.min(Math.max(lineProg * N - i + 0.6, 0), 1);
   const totalEntries = axes.reduce((s, a) => s + a.count, 0);
 
   return (
@@ -556,11 +620,13 @@ function SkillRadar({ navigateTo }) {
 
         {/* Glow layer */}
         <path d={rDataPath(fracs)} fill="rgba(124,29,63,0.20)"
-          filter="url(#radarGlow)" opacity={dataProg} />
+          filter="url(#radarGlow)" opacity={fillProg} />
 
-        {/* Skill polygon */}
-        <path d={rDataPath(fracs)} fill="url(#skillFill)"
-          stroke="#7C1D3F" strokeWidth="2" opacity={dataProg} />
+        {/* Skill polygon: fill fades in, outline traces itself */}
+        <path d={rDataPath(fracs)} fill="url(#skillFill)" opacity={fillProg} />
+        <path d={rDataPath(fracs)} fill="none"
+          stroke="#7C1D3F" strokeWidth="2" strokeLinejoin="round"
+          pathLength="1" strokeDasharray="1" strokeDashoffset={1 - lineProg} />
 
         {/* Invisible hit-area per axis for click/hover */}
         {axes.map((ax, i) => {
@@ -583,7 +649,7 @@ function SkillRadar({ navigateTo }) {
           const hov = hovered === i;
           return (
             <circle key={i} cx={x} cy={y}
-              r={hov ? 6.5 : 4.5}
+              r={(hov ? 6.5 : 4.5) * dotProg(i)}
               fill={hov ? "#7C1D3F" : "#A83B5A"} stroke="white"
               strokeWidth={hov ? 2 : 1.6}
               className={hov ? "radar-dot-pulse" : ""}
@@ -591,7 +657,7 @@ function SkillRadar({ navigateTo }) {
               onMouseEnter={() => setHovered(i)}
               onMouseLeave={() => setHovered(null)}
               onClick={() => navigateTo(`/${ax.slug}`)}
-              opacity={dataProg}
+              opacity={dotProg(i)}
             />
           );
         })}
@@ -1928,8 +1994,9 @@ function HomePage({ navigateTo }) {
             </div>
             <p className="hero-name">Aparnaa's</p>
             <h1 className="hero-headline">
-              Security investigations,<br />threat analysis, and<br />
-              <span className="hero-accent">detection research.</span>
+              <span className="hl-line"><span>Security investigations,</span></span>
+              <span className="hl-line"><span>threat analysis, and</span></span>
+              <span className="hl-line"><span className="hero-accent">detection research.</span></span>
             </h1>
             <p className="hero-desc">
               Documented case studies from hands-on lab work across endpoint forensics,
@@ -1960,6 +2027,7 @@ function HomePage({ navigateTo }) {
               <button key={slug} className="focus-card" onClick={() => navigateTo(`/${slug}`)} type="button"
                 style={{ animationDelay: `${i * 65}ms` }}>
                 <div className="focus-card-top">
+                  <span className="focus-icon" aria-hidden="true"><CategoryIcon slug={slug} /></span>
                   <span className="focus-title">{meta.label}</span>
                   {count > 0 && <span className="focus-count">{count}</span>}
                 </div>
@@ -2239,6 +2307,45 @@ function rehypeMergeCodeBlocks() {
 
 // ── Entry page ────────────────────────────────────────────
 
+// ── Screenshot lightbox ──────────────────────────────────
+// Click a screenshot to view it full screen. Opened via a window event so the
+// write-up itself doesn't re-render.
+
+function openLightbox(src, alt) {
+  window.dispatchEvent(new CustomEvent("open-lightbox", { detail: { src, alt } }));
+}
+
+function Lightbox() {
+  const [img, setImg] = useState(null);
+
+  useEffect(() => {
+    const open = e => setImg(e.detail);
+    window.addEventListener("open-lightbox", open);
+    return () => window.removeEventListener("open-lightbox", open);
+  }, []);
+
+  useEffect(() => {
+    if (!img) return;
+    const onKey = e => { if (e.key === "Escape") setImg(null); };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [img]);
+
+  if (!img) return null;
+  return (
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label="Screenshot, full size"
+      onClick={() => setImg(null)}>
+      <img src={img.src} alt={img.alt || ""} />
+      <button className="lightbox-close" type="button" aria-label="Close">×</button>
+    </div>
+  );
+}
+
 function EntryPage({ entry, navigateTo }) {
   const meta = CATEGORY_META[entry.categorySlug] || { label: entry.categorySlug, color: "var(--accent)" };
   const [scrollPct, setScrollPct] = useState(0);
@@ -2322,8 +2429,16 @@ function EntryPage({ entry, navigateTo }) {
                   ? `${base}/media/${src.replace(/^media\//, "")}`
                   : src;
                 return (
-                  <figure className="md-figure">
-                    <img src={resolved} alt={alt} {...props} />
+                  <figure className="md-figure" title="Click to enlarge"
+                    onClick={() => openLightbox(resolved, alt)}>
+                    <img src={resolved} alt={alt} {...props}
+                      onLoad={e => {
+                        // Near-full-width screenshots fill the column so their
+                        // edges line up with the text; small ones stay as they are.
+                        if (e.currentTarget.naturalWidth >= 640) {
+                          e.currentTarget.closest("figure")?.classList.add("md-figure--full");
+                        }
+                      }} />
                     {alt && <figcaption>{alt}</figcaption>}
                   </figure>
                 );
