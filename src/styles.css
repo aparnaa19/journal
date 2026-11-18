@@ -2876,7 +2876,7 @@ button.social-link {
 
 .view-entry .data-table tbody tr:nth-child(even) td { background: rgba(150, 115, 60, 0.05); }
 
-.view-entry .markdown-entry code {
+.view-entry .markdown-entry :not(pre) > code {
   background: rgba(150, 115, 60, 0.12);
   border-color: rgba(110, 80, 45, 0.20);
   color: #3A2A20;
