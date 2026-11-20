@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/preview.png" alt="Journal preview" width="850">
+  <img src="docs/image.png" alt="Journal preview" width="850">
 </p>
 
 <h1 align="center">Journal</h1>
