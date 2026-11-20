@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/image.png" alt="Journal preview" width="850">
-</p>
-
 <h1 align="center">Journal</h1>
 
 <p align="center">
@@ -15,7 +11,11 @@
 Every entry here is a real investigation on real attack data. I don't just record the answer.
 I write down how I got there, including the wrong turns, because that's where the learning is.
 
-## How I investigate
+<p align="center">
+  <img src="docs/image.png" alt="Journal preview" width="850">
+</p>
+
+## How I Work..
 
 ```mermaid
 flowchart LR
